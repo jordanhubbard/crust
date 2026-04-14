@@ -1,0 +1,16 @@
+[package]
+name = "crust"
+version = "0.1.0"
+edition = "2021"
+description = "An interpreted Rust for rapid prototyping — gradual strictness from hack mode to full borrow checking"
+license = "MIT"
+repository = "https://github.com/jordanhubbard/crust"
+
+[dependencies]
+syn = { version = "2", features = ["full", "parsing", "printing", "visit"] }
+quote = "1"
+proc-macro2 = "1"
+clap = { version = "4", features = ["derive"] }
+rustyline = "14"
+miette = { version = "7", features = ["fancy"] }
+thiserror = "2"
