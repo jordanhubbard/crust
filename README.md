@@ -1,49 +1,49 @@
-# Crust — Python in, Rust out
+# Crust — Rust for the rest of us
 
-> *What if your Python scripts compiled to native binaries?*
+> *What if Rust didn't yell at you until you were ready?*
 
-**Crust** takes Python code you've already written and compiles it to Rust, which compiles to a native binary. No new language to learn. No rewrite. Your Python, running at Rust speed.
+**Crust** is Rust without the learning cliff. Same syntax, same semantics, same binary — but the borrow checker, lifetime annotations, and type system complexity stay out of your way until you ask for them.
 
-```bash
-$ cat fib.py
-def fib(n):
-    if n <= 1:
-        return n
-    return fib(n - 1) + fib(n - 2)
+You write Rust. It runs. When you're ready for the compiler to get strict, you turn the dial.
 
-print(fib(35))
+```rust
+fn main() {
+    let data = vec![1, 2, 3, 4, 5];
+    let sum = calculate_sum(data);
+    println!("Sum of {data:?} is {sum}");  // moved? Crust handles it.
+}
 
-$ crust run fib.py
-9227465
-
-$ crust build fib.py -o fib
-   Compiled crust v0.1.0
-    Finished `release` profile [optimized]
-      Binary: fib
-
-$ ./fib
-9227465
-
-$ time python3 fib.py
-9227465
-real    0m2.41s
-
-$ time ./fib
-9227465
-real    0m0.02s
+fn calculate_sum(nums: Vec<i32>) -> i32 {
+    nums.iter().sum()
+}
 ```
 
-Same code. 120x faster. No rewrite.
+```bash
+$ crust run main.crust
+Sum of [1, 2, 3, 4, 5] is 15
+
+$ crust build main.crust -o main
+   Compiled crust v0.1.0
+    Finished `release` profile [optimized]
+      Binary: main
+
+$ ./main
+Sum of [1, 2, 3, 4, 5] is 15
+```
+
+No borrow checker errors. No lifetime annotations. No fighting the compiler for 45 minutes to print a list. Just Rust that works.
 
 ---
 
 ## The Problem
 
-There are 50 million Python developers. Python is the most popular language on earth. It's also 10–100x slower than compiled languages for compute-bound work, and that gap isn't closing.
+Every company wants to hire Rust developers. There aren't enough.
 
-The industry's answer has been: "learn Rust." But the data says that's not working.
+Rust is the most admired language eight years running. It produces the fastest, safest binaries of any modern language. Every systems team, every infrastructure org, every cloud vendor wants more Rust. But the talent pool is a puddle.
 
-**25% of developers who try Rust abandon it** because it's too intimidating (Rust Community Survey, 2017–2024). JetBrains analyzed millions of builds and found the [top 10 most common compiler errors](https://blog.jetbrains.com/rust/2023/12/14/the-most-common-rust-compiler-errors-as-encountered-in-rustrover/):
+**25% of developers who try Rust give up** because it's "too intimidating, too hard to learn, or too complicated" (Rust Community Survey, 2017–2024).
+
+JetBrains analyzed millions of builds and published the [top 10 compiler errors](https://blog.jetbrains.com/rust/2023/12/14/the-most-common-rust-compiler-errors-as-encountered-in-rustrover/) that kill adoption:
 
 | Rank | Error | What it means | % of devs hit |
 |------|-------|--------------|---------------|
@@ -58,98 +58,94 @@ The industry's answer has been: "learn Rust." But the data says that's not worki
 | **9** | E0061 | Wrong number of arguments | **13%** |
 | **10** | E0412 | Type not in scope | **12%** |
 
-The top 3 aren't even ownership errors — they're type system friction. The borrow checker gets the blame, but the entire Rust developer experience is the barrier.
+The borrow checker (E0382) isn't even the top killer — it's **#6**. The entire type system is the wall. Developers hit errors on every axis — traits, types, ownership, imports — all at once, from line one, with no way to say "not yet."
 
-Stanford researchers ([Zeng & Crichton, 2018](https://arxiv.org/abs/1901.01001)) confirmed: solutions to common Rust patterns exist, but developers can't find them. The problem isn't that Rust is wrong. The problem is that Rust demands you understand everything before you can ship anything.
+Stanford researchers confirmed it ([Zeng & Crichton, 2018](https://arxiv.org/abs/1901.01001)): solutions to every common Rust pattern exist, but beginners can't find them because the compiler demands mastery before it allows progress.
 
-**Python doesn't demand that. And Python won.**
+**The result:** companies can't hire Rust devs, because the language won't let people become Rust devs.
 
 ---
 
-## The Insight
+## The Fix
 
-Nobody is going to rewrite 50 million Python developers' brains. But we can rewrite their binaries.
+Crust doesn't change Rust. It sequences the learning curve.
 
-Crust doesn't teach Python developers Rust. It compiles their Python to Rust *for* them. The developer never leaves their comfort zone — same syntax, same semantics, same workflow — but the output is a statically-typed, memory-safe, zero-cost-abstraction native binary.
+Every one of those top 10 errors has a reasonable default that a beginner doesn't need to understand yet:
+
+| Error | What Crust does at Level 0 |
+|-------|---------------------------|
+| E0277 — Missing trait impl | Auto-derive common traits (Debug, Clone, Display) |
+| E0308 — Type mismatch | Implicit coercion where safe (i32 ↔ i64, &str ↔ String) |
+| E0599 — Method not found | Suggest + auto-import, try common iterator adapters |
+| E0382 — Use after move | Implicit clone |
+| E0282 — Can't infer type | Widen inference, default to concrete types |
+| E0106 — Missing lifetime | Elide aggressively, default to `'_` |
+
+The code is still Rust. The binary is still Rust. The developer just doesn't get punched in the face on day one.
 
 ### The Strictness Dial
 
-For developers who *want* to learn Rust, Crust provides a migration path:
-
 ```
-Level 0: Python     — write Python, get binaries (default)
-Level 1: Annotated  — Crust shows equivalent Rust, suggests type annotations
-Level 2: Hybrid     — mix Python and Rust syntax, Crust bridges the gap
-Level 3: Rust       — pure Rust output, crust build = rustc
+Level 0: Explore    — no borrow checker, implicit Clone, auto-derive, type coercion
+                      "Python ease, Rust syntax"
+
+Level 1: Develop    — warnings on moves, type mismatch hints, shadow detection
+                      "The compiler is your mentor, not your drill sergeant"
+
+Level 2: Harden     — borrow checker active, must annotate lifetimes, explicit types
+                      "Training wheels off"
+
+Level 3: Ship       — full rustc parity, cargo clippy clean, zero-cost abstractions
+                      "This IS rustc"
 ```
 
-At Level 0, you never see Rust. At Level 3, your code *is* Rust. The dial turns at your pace.
+At Level 3, `crust build` and `rustc` produce identical output. Because the code was always Rust — it just had a patient teacher.
+
+---
+
+## Why This Works
+
+**For developers:** You learn Rust by writing Rust — not by reading a 400-page book before you can print hello. Every concept arrives when you need it, explained by the compiler at your current level.
+
+**For hiring managers:** Your Rust talent pool just became "anyone who can write code." Crust developers write real Rust syntax from day one. By the time they hit Level 2, they're mid-level Rust developers. You didn't train them — the tool did.
+
+**For the Rust ecosystem:** More developers writing Rust means more crates, more libraries, more production deployments. Crust isn't a fork — it's a funnel.
 
 ---
 
 ## How It Works
 
 ```
- .py source
+ .crust source (Rust syntax)
      │
      ▼
 ┌─────────┐     ┌──────────┐     ┌─────────┐     ┌──────────┐
-│  Parse   │────▶│  Infer   │────▶│  Emit   │────▶│  Compile │
-│  Python  │     │  Types   │     │  Rust   │     │  (rustc) │
+│  Parse   │────▶│  Desugar │────▶│  Check   │────▶│  Compile │
+│  (Rust)  │     │  (level) │     │  (level) │     │  (rustc) │
 └─────────┘     └──────────┘     └─────────┘     └──────────┘
-                                      │
-                                      ▼
-                                 .rs intermediate
-                                 (inspectable)
 ```
 
-1. **Parse** — full Python 3.12+ grammar via tree-sitter or RustPython parser
-2. **Infer** — Hindley-Milner type inference on untyped Python; uses type hints when present
-3. **Emit** — generate idiomatic Rust with ownership analysis baked in
-4. **Compile** — `rustc` produces the native binary
+1. **Parse** — full Rust grammar, hand-written recursive descent
+2. **Desugar** — insert implicit clones, auto-derives, type coercions based on strictness level
+3. **Check** — apply only the checks enabled at current level
+4. **Compile** — emit `.rs`, invoke `rustc` for native binary
 
-The intermediate `.rs` file is always available for inspection. Want to see what your Python became? `crust build --emit-rs fib.py` drops `fib.rs` next to the binary.
-
----
-
-## What Maps Cleanly
-
-Python and Rust share more than people think:
-
-| Python | Rust | Notes |
-|--------|------|-------|
-| `def f(x: int) -> int` | `fn f(x: i64) -> i64` | Direct mapping with type hints |
-| `for x in items` | `for x in items.iter()` | Iterator protocol → Rust iterators |
-| `if/elif/else` | `if/else if/else` | Trivial |
-| `match` (3.10+) | `match` | Structural pattern matching both ways |
-| `class Foo` | `struct Foo` + `impl Foo` | Methods become impl blocks |
-| `list[int]` | `Vec<i64>` | Generic containers map directly |
-| `dict[str, int]` | `HashMap<String, i64>` | Same |
-| `Optional[int]` | `Option<i64>` | Python's typing module was *designed* for this |
-| `raise ValueError` | `Err(ValueError)` | Exceptions → Result types |
-| List comprehensions | `.iter().filter().map().collect()` | Pythonic → idiomatic Rust |
-| `with open(f)` | Scope-based RAII | Context managers → Drop |
-
-### What Requires Decisions
-
-| Python | Challenge | Crust Strategy |
-|--------|-----------|----------------|
-| Dynamic typing | No types at all | H-M inference + runtime fallback to `enum Value` |
-| `*args, **kwargs` | Variadic | Macro-generated dispatchers |
-| Monkey-patching | Runtime mutation | Refuse at compile time (Level 0 warns) |
-| GIL-dependent code | Thread safety | Detect and wrap in `Mutex` |
-| C extensions (numpy) | FFI boundary | Link against existing `.so`, don't transpile |
+`crust run` interprets directly. `crust build` emits Rust and compiles. The intermediate `.rs` is always inspectable with `--emit-rs`.
 
 ---
 
 ## The Market
 
-- **50M** Python developers worldwide (SlashData, 2024)
-- **$0** they currently spend on making Python fast (it's "fast enough" or they rewrite in C/Rust)
-- **2.41s → 0.02s** — the performance gap Crust closes without a rewrite
-- Python is the #1 language for AI/ML. Every training loop, every data pipeline, every inference server is Python. And every one of them is leaving performance on the table.
+This isn't a language play. It's a **hiring play.**
 
-Crust doesn't compete with Rust. Crust is **distribution for Rust** — the same way Chrome was distribution for V8.
+- **3.5M** job postings mention Rust (2024, growing 30% YoY)
+- **~3M** estimated Rust developers worldwide (vs. 50M Python, 17M JavaScript)
+- **$158K** median Rust developer salary (highest of any language, Stack Overflow 2024)
+- **25%** Rust attrition rate among learners
+
+The supply/demand gap is the product. Every developer who bounces off `rustc` is a customer.
+
+Crust doesn't compete with Rust. **Crust manufactures Rust developers.**
 
 ---
 
@@ -158,28 +154,28 @@ Crust doesn't compete with Rust. Crust is **distribution for Rust** — the same
 ```bash
 cargo install crust
 
-crust run script.py           # interpret + run
-crust build script.py -o app  # compile to native binary
-crust build --emit-rs lib.py  # see the generated Rust
+crust run hello.crust           # interpret + run
+crust build hello.crust -o app  # compile to native binary
+crust build --emit-rs lib.crust # see the Rust that Crust generates
 ```
 
 ---
 
 ## Current Status
 
-**v0.1.0** — Foundation. Parser, type inference scaffolding, code generation pipeline.
+**v0.1.0** — Foundation. Lexer, parser, interpreter core, build pipeline.
 
-See [DESIGN.md](DESIGN.md) for the full technical architecture.
+See [DESIGN.md](DESIGN.md) for the full technical architecture and roadmap.
 
 ---
 
 ## The Bet
 
-The world doesn't need another language. It needs a compiler that meets developers where they are.
+The world doesn't need another language. Rust already won the language war — it just lost the adoption war.
 
-50 million people already write Python. Crust gives them native binaries from the code they already wrote. No new syntax. No rewrite. No 400-page book.
+Crust fixes adoption. Same syntax. Same compiler. Same binary. Different learning curve.
 
-**Python in. Rust out.**
+**Rust for the rest of us.**
 
 ---
 

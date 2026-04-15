@@ -90,17 +90,24 @@ fn build(args: &[String]) {
 
 fn help() {
     println!(
-        "crust {} — Python in, Rust out
+        "crust {} — Rust for the rest of us
 
 USAGE:
-    crust run <file.py>           Run a Python script (interpreted)
-    crust build <file.py> -o out  Compile to native binary via Rust
+    crust run <file.crust>           Run a .crust source file
+    crust build <file.crust> -o out  Compile to native binary
 
 OPTIONS:
     -o, --output NAME    Set output binary name (default: a.out)
     --emit-rs            Also output the generated .rs file
+    --strict=LEVEL       Set strictness 0-3 (default: 0)
     --help, -h           Show this message
-    --version, -V        Show version",
+    --version, -V        Show version
+
+STRICTNESS LEVELS:
+    0  Explore   — no borrow checker, implicit Clone (default)
+    1  Develop   — warnings on moves, type hints
+    2  Harden    — borrow checker active, explicit lifetimes
+    3  Ship      — full rustc parity",
         env!("CARGO_PKG_VERSION")
     );
 }

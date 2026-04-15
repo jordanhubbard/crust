@@ -1,0 +1,12 @@
+fn greet(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+
+fn main() {
+    let names = vec!["world", "Rust", "everyone"];
+    for name in names {
+        println!("{}", greet(name));
+    }
+    // At Level 0, `names` is still usable here — implicit clone.
+    println!("Greeted {} people", names.len());
+}

@@ -1,0 +1,20 @@
+// No #[derive(Debug, Clone)] needed — Crust auto-derives at Level 0.
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+impl Point {
+    fn distance(&self, other: Point) -> f64 {
+        // `other` is moved here, but at Level 0 that's fine — implicit clone.
+        ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
+    }
+}
+
+fn main() {
+    let a = Point { x: 0.0, y: 0.0 };
+    let b = Point { x: 3.0, y: 4.0 };
+    println!("Distance: {}", a.distance(b));
+    // At Level 0, `b` is still usable — it was implicitly cloned.
+    println!("Point b: ({}, {})", b.x, b.y);
+}
