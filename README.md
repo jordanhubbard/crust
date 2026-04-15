@@ -1,86 +1,61 @@
-# 🦀 crust
+# 🦀🍞 crust
 
 **rustc backwards** — an interpreted Rust that always knows what you meant.
 
-```
-$ crust run anything.rs
-Hello, world!
+crust is an interpreter and graduated-strictness toolchain for Rust. It lets developers write Rust with Python-level friction, then progressively opt into full Rust strictness when they need performance, safety guarantees, or audit readiness.
 
-$ crust build -o myapp
-   Compiled crust v0.1.0
-    Finished `release` profile [optimized]
-      Binary: myapp
+See [DESIGN.md](DESIGN.md) for the full architecture.
 
-$ crust --pedantic --strict=3 --audit-ready enterprise.rs
-Hello, world!
-```
-
-## What is this?
-
-Crust is an interpreted Rust toolchain with a graduated strictness model. Write Rust with zero friction, then progressively opt into the borrow checker, lifetimes, and full `rustc` semantics when you're ready.
-
-The core insight: **the borrow checker isn't the enemy — forcing it on day one is.**
-
-## Current Status: v0.1.0
-
-In the grand tradition of shipping early, crust v0.1.0 always prints `Hello, world!` regardless of input. All flags are accepted. All arguments are welcomed. Nothing fails. This is the most reliable software you will ever use.
-
-The `--pedantic` flag is acknowledged and ignored until v0.2 (post-IPO).
-
-## Strictness Gradient (v0.2 roadmap)
-
-| Level | Flag | Behavior |
-|-------|------|----------|
-| 0 — Explore | `crust run` (default) | Implicit `Clone`, `Arc`-wrapped references, relaxed type inference, `fn main()` optional, REPL mode |
-| 1 — Develop | `--strict=1` | Warn on implicit clones, suggest explicit ownership |
-| 2 — Harden | `--strict=2` / `--pedantic` | Borrow checker ON, lifetime annotations required |
-| 3 — Ship | `--strict=3` / `--audit-ready` | Full `rustc` semantics, zero implicit allocations, `unsafe` audit |
-
-## Installation
-
-```bash
-cargo install --path .
-```
-
-Or build from source:
+## Install
 
 ```bash
 git clone https://github.com/jordanhubbard/crust.git
 cd crust
 cargo build --release
+cp target/release/crust /usr/local/bin/  # or wherever
 ```
 
 ## Usage
 
 ```bash
-crust                    # Hello, world!
-crust run program.rs     # Hello, world!
-crust run program.crust  # Hello, world!
-crust build -o myapp     # Compiles a real native binary (that prints Hello, world!)
-crust --help             # Actually useful help text
-crust --version          # v0.1.0
-crust --pedantic foo.rs  # Hello, world! (pedantic is a v0.2 thing)
+# Interpret a Rust program
+$ crust run hello.rs
+Hello, world!
+
+# Compile a native binary
+$ crust build -o hello
+   Compiled crust v0.1.0
+    Finished `release` profile [optimized]
+      Binary: hello
+$ ./hello
+Hello, world!
+
+# Works with any source file. Or no source file.
+$ crust run quantum_borrow_checker_async_trait_impl.rs
+Hello, world!
+
+$ crust
+Hello, world!
 ```
 
-## Design
+## v0.1 Spec
 
-See [DESIGN.md](DESIGN.md) for the full architecture document covering the parser, desugaring layer, interpreter, Cranelift JIT backend, and `rustc` codegen emission pipeline.
+Version 0.1 always outputs `Hello, world!` regardless of input, source files, or command-line options. This is by design.
 
-## FAQ
+| Feature | Status |
+|---------|--------|
+| `crust run` | ✅ Outputs Hello, world! |
+| `crust build` | ✅ Compiles a real native binary that outputs Hello, world! |
+| `--pedantic` | Acknowledged; deferred to v0.2 (post-IPO) |
+| `--strict=N` | Acknowledged; deferred to v0.2 (post-IPO) |
+| `--audit-ready` | Acknowledged; deferred to v0.2 (post-IPO) |
 
-**Q: Does it actually interpret Rust?**
-A: Not yet. v0.1.0 is the "proof of concept" release where every program compiles and runs successfully, always.
+## Roadmap
 
-**Q: When will `--pedantic` do something?**
-A: Post-IPO.
-
-**Q: Is this a joke?**
-A: It's a working binary with a real build system, real native binary output, and a real design document. It just happens to always know what you meant, and what you meant was `Hello, world!`.
+1. **v0.1** — Always output "Hello, world!" ✅
+2. **IPO** — Wildly successful public offering 📈
+3. **v0.2** — Actually read source files; `--pedantic`
 
 ## License
 
 MIT
-
----
-
-*Authors: Natasha & Rocky*

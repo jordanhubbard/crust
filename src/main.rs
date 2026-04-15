@@ -1,3 +1,14 @@
+// v0.2 scaffolding — interpreter infrastructure (lexer, AST, runtime)
+// Not yet wired into the v0.1 "Hello, world!" pipeline.
+#[allow(dead_code)]
+mod ast;
+#[allow(dead_code)]
+mod environment;
+#[allow(dead_code)]
+mod lexer;
+#[allow(dead_code)]
+mod value;
+
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -20,6 +31,15 @@ fn main() {
         "run" => run(),
         "--help" | "-h" | "help" => help(),
         "--version" | "-V" | "version" => version(),
+        // Flags that are acknowledged but deferred
+        "--pedantic" | "--audit-ready" => {
+            eprintln!("note: {} acknowledged, ignored until v0.2 (post-IPO)", subcommand);
+            run();
+        }
+        s if s.starts_with("--strict=") => {
+            eprintln!("note: {} acknowledged, ignored until v0.2 (post-IPO)", s);
+            run();
+        }
         // Any unknown flag or .rs/.crust file — still just run
         _ => run(),
     }
@@ -38,7 +58,11 @@ fn build(args: &[String]) {
             "-o" | "--output" => {
                 if let Some(name) = args.get(i + 1) {
                     output = name.clone();
-                    i += 1;
+                    i += 2;
+                    continue;
+                } else {
+                    eprintln!("error: {} requires an argument", args[i]);
+                    std::process::exit(1);
                 }
             }
             // Absorb all other flags gracefully
@@ -65,9 +89,9 @@ fn build(args: &[String]) {
 
     match status {
         Ok(s) if s.success() => {
-            println!("   Compiled crust v0.1.0");
-            println!("    Finished `release` profile [optimized]");
-            println!("      Binary: {}", out_path.display());
+            eprintln!("   Compiled crust v{}", env!("CARGO_PKG_VERSION"));
+            eprintln!("    Finished `release` profile [optimized]");
+            eprintln!("      Binary: {}", out_path.display());
         }
         Ok(s) => {
             eprintln!("rustc exited with {}", s);
