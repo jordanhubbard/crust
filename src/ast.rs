@@ -3,10 +3,7 @@
 #[derive(Debug, Clone)]
 pub enum Stmt {
     /// `let <name> = <expr>;`
-    Let {
-        name: String,
-        value: Expr,
-    },
+    Let { name: String, value: Expr },
     /// `struct Name { field: Type, ... }`
     StructDef {
         name: String,
@@ -21,12 +18,13 @@ pub enum Stmt {
     /// An expression used as a statement (e.g. function call, println!)
     ExprStmt(Expr),
     /// `while <cond> { <body> }`
-    While {
-        condition: Expr,
-        body: Vec<Stmt>,
-    },
+    While { condition: Expr, body: Vec<Stmt> },
     /// `loop { <body> }` — infinite loop, broken with `break`
-    Loop {
+    Loop { body: Vec<Stmt> },
+    /// `for var in iter { body }`
+    For {
+        var: String,
+        iter: Expr,
         body: Vec<Stmt>,
     },
     /// `break;`
@@ -34,16 +32,13 @@ pub enum Stmt {
     /// `return <expr>;` or `return;`
     Return(Option<Expr>),
     /// Reassignment: `name = expr;`
-    Assign {
-        target: AssignTarget,
-        value: Expr,
-    },
+    Assign { target: AssignTarget, value: Expr },
 }
 
 #[derive(Debug, Clone)]
 pub enum AssignTarget {
     Variable(String),
-    Field(Box<Expr>, String), // expr.field
+    Field(Box<Expr>, String),    // expr.field
     Index(Box<Expr>, Box<Expr>), // expr[index]
 }
 
@@ -66,19 +61,17 @@ pub enum Expr {
         right: Box<Expr>,
     },
     /// Unary operation: op expr
-    UnaryOp {
-        op: UnaryOp,
-        expr: Box<Expr>,
-    },
+    UnaryOp { op: UnaryOp, expr: Box<Expr> },
     /// Function call: name(args)
     Call {
         function: Box<Expr>,
         args: Vec<Expr>,
     },
-    /// println!("fmt", args...)
+    /// println!/print! macro
     PrintLn {
         format_str: String,
         args: Vec<Expr>,
+        newline: bool,
     },
     /// vec![elem1, elem2, ...]
     VecLit(Vec<Expr>),
@@ -88,15 +81,9 @@ pub enum Expr {
         fields: Vec<(String, Expr)>,
     },
     /// Field access: expr.field
-    FieldAccess {
-        object: Box<Expr>,
-        field: String,
-    },
+    FieldAccess { object: Box<Expr>, field: String },
     /// Index access: expr[index]
-    IndexAccess {
-        object: Box<Expr>,
-        index: Box<Expr>,
-    },
+    IndexAccess { object: Box<Expr>, index: Box<Expr> },
     /// Method call: expr.method(args)
     MethodCall {
         object: Box<Expr>,
@@ -111,6 +98,12 @@ pub enum Expr {
     },
     /// Block expression: { stmts }
     Block(Vec<Stmt>),
+    /// Range: start..end or start..=end
+    Range {
+        start: Box<Expr>,
+        end: Box<Expr>,
+        inclusive: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

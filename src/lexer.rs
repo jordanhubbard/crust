@@ -21,36 +21,50 @@ pub enum Token {
     Loop,
     Break,
     Return,
+    For,
+    In,
+    Mut,
+    Use,
+    Pub,
+    Impl,
 
     // Punctuation
-    LParen,    // (
-    RParen,    // )
-    LBrace,    // {
-    RBrace,    // }
-    LBracket,  // [
-    RBracket,  // ]
-    Comma,     // ,
-    Semicolon, // ;
-    Colon,     // :
-    Dot,       // .
-    Arrow,     // ->
+    LParen,     // (
+    RParen,     // )
+    LBrace,     // {
+    RBrace,     // }
+    LBracket,   // [
+    RBracket,   // ]
+    Comma,      // ,
+    Semicolon,  // ;
+    Colon,      // :
+    ColonColon, // ::
+    Dot,        // .
+    DotDot,     // ..
+    DotDotEq,   // ..=
+    Arrow,      // ->
 
     // Operators
-    Plus,      // +
-    Minus,     // -
-    Star,      // *
-    Slash,     // /
-    Percent,   // %
-    Eq,        // =
-    EqEq,      // ==
-    BangEq,    // !=
-    Lt,        // <
-    Gt,        // >
-    LtEq,      // <=
-    GtEq,      // >=
-    AmpAmp,    // &&
-    PipePipe,  // ||
-    Bang,      // !
+    Plus,     // +
+    PlusEq,   // +=
+    Minus,    // -
+    MinusEq,  // -=
+    Star,     // *
+    StarEq,   // *=
+    Slash,    // /
+    SlashEq,  // /=
+    Percent,  // %
+    Eq,       // =
+    EqEq,     // ==
+    BangEq,   // !=
+    Lt,       // <
+    Gt,       // >
+    LtEq,     // <=
+    GtEq,     // >=
+    Amp,      // &
+    AmpAmp,   // &&
+    PipePipe, // ||
+    Bang,     // !
 
     // Special
     Eof,
@@ -174,25 +188,100 @@ impl Lexer {
 
         // Punctuation and operators
         let token = match ch {
-            '(' => { self.advance(); Token::LParen }
-            ')' => { self.advance(); Token::RParen }
-            '{' => { self.advance(); Token::LBrace }
-            '}' => { self.advance(); Token::RBrace }
-            '[' => { self.advance(); Token::LBracket }
-            ']' => { self.advance(); Token::RBracket }
-            ',' => { self.advance(); Token::Comma }
-            ';' => { self.advance(); Token::Semicolon }
-            ':' => { self.advance(); Token::Colon }
-            '.' => { self.advance(); Token::Dot }
-            '%' => { self.advance(); Token::Percent }
-            '+' => { self.advance(); Token::Plus }
-            '*' => { self.advance(); Token::Star }
-            '/' => { self.advance(); Token::Slash }
+            '(' => {
+                self.advance();
+                Token::LParen
+            }
+            ')' => {
+                self.advance();
+                Token::RParen
+            }
+            '{' => {
+                self.advance();
+                Token::LBrace
+            }
+            '}' => {
+                self.advance();
+                Token::RBrace
+            }
+            '[' => {
+                self.advance();
+                Token::LBracket
+            }
+            ']' => {
+                self.advance();
+                Token::RBracket
+            }
+            ',' => {
+                self.advance();
+                Token::Comma
+            }
+            ';' => {
+                self.advance();
+                Token::Semicolon
+            }
+            ':' => {
+                self.advance();
+                if self.peek() == Some(':') {
+                    self.advance();
+                    Token::ColonColon
+                } else {
+                    Token::Colon
+                }
+            }
+            '.' => {
+                self.advance();
+                if self.peek() == Some('.') {
+                    self.advance();
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        Token::DotDotEq
+                    } else {
+                        Token::DotDot
+                    }
+                } else {
+                    Token::Dot
+                }
+            }
+            '%' => {
+                self.advance();
+                Token::Percent
+            }
+            '+' => {
+                self.advance();
+                if self.peek() == Some('=') {
+                    self.advance();
+                    Token::PlusEq
+                } else {
+                    Token::Plus
+                }
+            }
+            '*' => {
+                self.advance();
+                if self.peek() == Some('=') {
+                    self.advance();
+                    Token::StarEq
+                } else {
+                    Token::Star
+                }
+            }
+            '/' => {
+                self.advance();
+                if self.peek() == Some('=') {
+                    self.advance();
+                    Token::SlashEq
+                } else {
+                    Token::Slash
+                }
+            }
             '-' => {
                 self.advance();
                 if self.peek() == Some('>') {
                     self.advance();
                     Token::Arrow
+                } else if self.peek() == Some('=') {
+                    self.advance();
+                    Token::MinusEq
                 } else {
                     Token::Minus
                 }
@@ -239,7 +328,7 @@ impl Lexer {
                     self.advance();
                     Token::AmpAmp
                 } else {
-                    return Err(format!("{}:{}: unexpected character '&' (did you mean '&&'?)", line, col));
+                    Token::Amp
                 }
             }
             '|' => {
@@ -248,7 +337,10 @@ impl Lexer {
                     self.advance();
                     Token::PipePipe
                 } else {
-                    return Err(format!("{}:{}: unexpected character '|' (did you mean '||'?)", line, col));
+                    return Err(format!(
+                        "{}:{}: unexpected character '|' (did you mean '||'?)",
+                        line, col
+                    ));
                 }
             }
             _ => {
@@ -272,15 +364,38 @@ impl Lexer {
                 Some('\\') => {
                     self.advance();
                     match self.peek() {
-                        Some('n') => { self.advance(); s.push('\n'); }
-                        Some('t') => { self.advance(); s.push('\t'); }
-                        Some('\\') => { self.advance(); s.push('\\'); }
-                        Some('"') => { self.advance(); s.push('"'); }
-                        Some('0') => { self.advance(); s.push('\0'); }
-                        Some(c) => {
-                            return Err(format!("{}:{}: unknown escape sequence '\\{}'", self.line, self.col, c));
+                        Some('n') => {
+                            self.advance();
+                            s.push('\n');
                         }
-                        None => return Err(format!("{}:{}: unterminated string escape", self.line, self.col)),
+                        Some('t') => {
+                            self.advance();
+                            s.push('\t');
+                        }
+                        Some('\\') => {
+                            self.advance();
+                            s.push('\\');
+                        }
+                        Some('"') => {
+                            self.advance();
+                            s.push('"');
+                        }
+                        Some('0') => {
+                            self.advance();
+                            s.push('\0');
+                        }
+                        Some(c) => {
+                            return Err(format!(
+                                "{}:{}: unknown escape sequence '\\{}'",
+                                self.line, self.col, c
+                            ));
+                        }
+                        None => {
+                            return Err(format!(
+                                "{}:{}: unterminated string escape",
+                                self.line, self.col
+                            ))
+                        }
                     }
                 }
                 Some(c) => {
@@ -289,7 +404,11 @@ impl Lexer {
                 }
             }
         }
-        Ok(SpannedToken { token: Token::StringLit(s), line, col })
+        Ok(SpannedToken {
+            token: Token::StringLit(s),
+            line,
+            col,
+        })
     }
 
     fn read_number(&mut self, line: usize, col: usize) -> Result<SpannedToken, String> {
@@ -303,7 +422,7 @@ impl Lexer {
                 }
                 self.advance();
             } else if c == '.' && !is_float {
-                // Check if it's really a decimal point (not a method call)
+                // Check if it's really a decimal point (not a method call or range)
                 if let Some(next) = self.peek_ahead(1) {
                     if next.is_ascii_digit() {
                         is_float = true;
@@ -322,14 +441,28 @@ impl Lexer {
 
         if is_float {
             let val: f64 = num_str.parse().map_err(|e| {
-                format!("{}:{}: invalid float literal '{}': {}", line, col, num_str, e)
+                format!(
+                    "{}:{}: invalid float literal '{}': {}",
+                    line, col, num_str, e
+                )
             })?;
-            Ok(SpannedToken { token: Token::FloatLit(val), line, col })
+            Ok(SpannedToken {
+                token: Token::FloatLit(val),
+                line,
+                col,
+            })
         } else {
             let val: i64 = num_str.parse().map_err(|e| {
-                format!("{}:{}: invalid integer literal '{}': {}", line, col, num_str, e)
+                format!(
+                    "{}:{}: invalid integer literal '{}': {}",
+                    line, col, num_str, e
+                )
             })?;
-            Ok(SpannedToken { token: Token::IntLit(val), line, col })
+            Ok(SpannedToken {
+                token: Token::IntLit(val),
+                line,
+                col,
+            })
         }
     }
 
@@ -354,6 +487,12 @@ impl Lexer {
             "loop" => Token::Loop,
             "break" => Token::Break,
             "return" => Token::Return,
+            "for" => Token::For,
+            "in" => Token::In,
+            "mut" => Token::Mut,
+            "use" => Token::Use,
+            "pub" => Token::Pub,
+            "impl" => Token::Impl,
             "true" => Token::BoolLit(true),
             "false" => Token::BoolLit(false),
             _ => Token::Ident(ident),
