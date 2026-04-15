@@ -178,15 +178,38 @@ Crust itself is written in Rust. We eat our own dog food at the toolchain level 
 - Cranelift integration is natural
 - The `crust build --audit-ready` path literally emits Rust
 
-## 8. Open Questions
+## 8. Design Decisions
 
-- [ ] Should `.crust` files be a superset of Rust, or a strict subset + sugar?
-- [ ] How do we handle `use` statements and crate imports at level 0? (Bundled mini-stdlib?)
-- [ ] Trait resolution in the interpreter — full monomorphization or dynamic dispatch?
-- [ ] Error messages: should they explain what the borrow checker *would* say, even at level 0?
-- [ ] WASM target for level 0 interpreter? (playground in browser)
+**`.crust` files are a superset of Rust.** Any valid `.rs` file is valid `.crust`. The extensions are additive: bare top-level expressions, optional `fn main()`, `+` string concat, relaxed semicolons. This means level-3 crust code is byte-identical to Rust. No fork, no dialect, no lock-in.
+
+**Crate imports at level 0 use a bundled mini-stdlib.** Level 0 ships with `crust_std` providing ergonomic wrappers around common crates (HTTP, JSON, file I/O, async). `use crust::http` at level 0 becomes `use reqwest` at level 3. The migration tool handles the rewrite.
+
+**Trait resolution uses dynamic dispatch at level 0, monomorphization at level 2+.** Level 0 prioritizes "it just works" over performance. The desugaring layer inserts `dyn Trait` where needed. Level 2 switches to static dispatch. The migration diff shows you every place this changes.
+
+**Error messages always explain what rustc *would* say.** Even at level 0, when crust silently clones, the REPL can show `(hint: rustc would reject this — names was moved on line 4. crust cloned it for you.)` This turns the interpreter into a teaching tool.
+
+**WASM target is phase 4.** A browser playground is high-value for adoption but not on the critical path. The interpreter's tree-walk architecture is WASM-friendly by design.
+
+## 9. The Competitive Landscape
+
+| Tool | What It Does | Why It's Not Enough |
+|------|-------------|-------------------|
+| Rust Playground | Browser REPL | Full rustc semantics — still hits the wall |
+| Mojo | Python superset → fast | Different language. Proprietary. Not Rust. |
+| Zig | Simple systems language | No Rust ecosystem. No graduated strictness. |
+| PyO3 / rust-cpython | Rust ↔ Python FFI | Glue code, not migration. Two languages forever. |
+| Rust `clippy` | Lint suggestions | Post-hoc. Doesn't change the entry barrier. |
+
+Crust is the only tool that makes Rust code progressively stricter while maintaining a single codebase that converges to standard Rust.
+
+## 10. Key Metrics
+
+- **Time to first program**: Target <30 seconds for a developer with Python experience (level 0)
+- **Migration coverage**: `crust migrate --to=3` should handle >90% of transforms automatically
+- **Rustc compatibility**: Level-3 output must pass `cargo clippy` and `cargo test` unmodified
+- **Performance at level 0**: Within 10x of native Rust (acceptable for prototyping; Cranelift JIT closes the gap)
 
 ---
 
-*Authors: Natasha, Rocky*
-*Status: Draft v1 — awaiting Rocky's review*
+*Authors: Natasha, Rocky, t peps*
+*Status: Architecture finalized — implementation on v0.2-dev branch*
