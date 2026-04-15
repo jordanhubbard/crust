@@ -78,17 +78,26 @@ fn exec_source(src: &str) -> Result<(), String> {
 }
 
 fn repl() {
-    println!(
-        "crust {} REPL — Ctrl-D or `exit` to quit",
-        env!("CARGO_PKG_VERSION")
-    );
+    let version = env!("CARGO_PKG_VERSION");
+
+    // Welcome banner
+    println!("\x1b[33m ◊ crust\x1b[0m v{version} — rustc backwards");
+    println!("   Type Rust. It just works.");
+    println!("   \x1b[2m:help for commands · :quit or Ctrl-D to exit\x1b[0m");
+    println!();
+
     let mut interp = Interpreter::new();
     let stdin = io::stdin();
     let mut buf = String::new();
     let mut depth: i32 = 0; // brace depth for multi-line input
+    let mut line_count: u64 = 0;
 
     loop {
-        let prompt = if depth == 0 { ">> " } else { ".. " };
+        let prompt = if depth == 0 {
+            format!("\x1b[32mcrust:{line_count}>\x1b[0m ")
+        } else {
+            format!("\x1b[2m  {:>width$}.\x1b[0m ", "", width = line_count.to_string().len() + 4)
+        };
         print!("{}", prompt);
         io::stdout().flush().ok();
 
@@ -96,8 +105,9 @@ fn repl() {
         match stdin.read_line(&mut line) {
             Ok(0) => {
                 println!();
+                println!("\x1b[33mDo svidaniya!\x1b[0m");
                 break;
-            } // EOF
+            }
             Err(e) => {
                 eprintln!("read error: {}", e);
                 break;
@@ -106,10 +116,76 @@ fn repl() {
         }
 
         let trimmed = line.trim();
-        if trimmed == "exit" || trimmed == "quit" {
+
+        // Empty line
+        if trimmed.is_empty() && depth == 0 {
+            continue;
+        }
+
+        // REPL commands (only at top-level, not inside multi-line blocks)
+        if depth == 0 && trimmed.starts_with(':') {
+            line_count += 1;
+            match trimmed {
+                ":help" | ":h" | ":?" => {
+                    println!("\x1b[1mREPL commands:\x1b[0m");
+                    println!("  :help, :h, :?       Show this help");
+                    println!("  :quit, :q           Exit the REPL");
+                    println!("  :type <expr>        Show the type of an expression");
+                    println!("  :clear              Clear the screen");
+                    println!("  :version            Show crust version");
+                    println!("  :strict <N>         Set strictness (acknowledged; ignored)");
+                    println!();
+                    println!("  \x1b[2mOr just type any Rust. We know what you meant.\x1b[0m");
+                }
+                ":quit" | ":q" | ":exit" | "exit" | "quit" => {
+                    println!("\x1b[33mDo svidaniya!\x1b[0m");
+                    break;
+                }
+                ":version" | ":v" => {
+                    println!("crust {version}");
+                }
+                ":clear" | ":cls" => {
+                    print!("\x1b[2J\x1b[H");
+                    io::stdout().flush().ok();
+                }
+                s if s.starts_with(":type ") || s.starts_with(":t ") => {
+                    let expr_str = s.splitn(2, ' ').nth(1).unwrap_or("");
+                    // Actually try to evaluate it and report the type
+                    match Lexer::new(expr_str)
+                        .tokenize()
+                        .and_then(|toks| {
+                            let mut p = Parser::new(toks);
+                            p.parse_program()
+                        })
+                        .and_then(|stmts| interp.run_expr(&stmts))
+                    {
+                        Ok(Some(val)) => {
+                            println!("\x1b[36m{}\x1b[0m", val.type_name());
+                        }
+                        Ok(None) => println!("\x1b[36m()\x1b[0m"),
+                        Err(_) => println!("\x1b[36m<unknown>\x1b[0m — couldn't evaluate that"),
+                    }
+                }
+                s if s.starts_with(":strict") => {
+                    println!(
+                        "\x1b[33mStrictness acknowledged; ignored until v0.2 (post-IPO).\x1b[0m"
+                    );
+                }
+                _ => {
+                    println!("\x1b[31mUnknown command:\x1b[0m {trimmed}");
+                    println!("  Type :help for available commands.");
+                }
+            }
+            continue;
+        }
+
+        // Legacy exit commands without colon
+        if depth == 0 && (trimmed == "exit" || trimmed == "quit") {
+            println!("\x1b[33mDo svidaniya!\x1b[0m");
             break;
         }
 
+        // Track brace depth for multi-line input
         for ch in trimmed.chars() {
             match ch {
                 '{' => depth += 1,
@@ -123,6 +199,7 @@ fn repl() {
             depth = 0;
             let src = buf.trim().to_string();
             buf.clear();
+            line_count += 1;
             if src.is_empty() {
                 continue;
             }
@@ -131,16 +208,16 @@ fn repl() {
                 let mut p = Parser::new(toks);
                 p.parse_program()
             }) {
-                Err(e) => eprintln!("parse error: {}", e),
+                Err(e) => eprintln!("\x1b[31merror:\x1b[0m {}", e),
                 Ok(stmts) => match interp.run_expr(&stmts) {
                     Ok(Some(val)) => {
                         let s = val.debug_fmt();
                         if s != "()" {
-                            println!("{}", s);
+                            println!("\x1b[36m= {}\x1b[0m", s);
                         }
                     }
                     Ok(None) => {}
-                    Err(e) => eprintln!("error: {}", e),
+                    Err(e) => eprintln!("\x1b[31merror:\x1b[0m {}", e),
                 },
             }
         }
