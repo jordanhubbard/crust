@@ -42,10 +42,10 @@ fn main() {
             });
             build_file(path, &args[3..]);
         }
-        Some("--help") | Some("-h") | Some("help") => help(),
+        Some("repl") => repl(),
+        Some("--help") | Some("-h") | Some("help") | None => help(),
         Some("--version") | Some("-V") | Some("version") => version(),
         Some(path) if path.ends_with(".crust") || path.ends_with(".rs") => run_file(path),
-        None => repl(),
         _ => {
             eprintln!("unknown subcommand '{}'. Try `crust help`.", args[1]);
             std::process::exit(1);
@@ -362,14 +362,12 @@ fn help() {
     println!("rustc backwards — an interpreted Rust that always knows what you meant");
     println!();
     println!("USAGE:");
-    println!("    crust [COMMAND] [FILE]");
-    println!();
-    println!("COMMANDS:");
-    println!("    run <file>           Interpret a .crust (or .rs) file");
-    println!("    build <file> [-o n]  Compile to native binary via rustc");
-    println!("    (no args)            Start the interactive REPL");
-    println!("    help                 Show this message");
-    println!("    version              Show version");
+    println!("    crust <file>             Interpret a .crust or .rs file");
+    println!("    crust run <file>         Same thing, explicit");
+    println!("    crust build <file> [-o]  Compile to native binary via rustc");
+    println!("    crust repl               Interactive mode");
+    println!("    crust help               This message");
+    println!("    crust version            Show version");
 }
 
 fn version() {
