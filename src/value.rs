@@ -1,5 +1,4 @@
 /// Runtime values for the Crust interpreter.
-use std::collections::HashMap;
 use std::fmt;
 
 #[derive(Debug, Clone)]
@@ -9,9 +8,10 @@ pub enum Value {
     Bool(bool),
     String(String),
     Vec(Vec<Value>),
+    /// Struct with ordered fields (Vec preserves definition order).
     Struct {
         name: String,
-        fields: HashMap<String, Value>,
+        fields: Vec<(String, Value)>,
     },
     Fn {
         name: String,
@@ -22,17 +22,15 @@ pub enum Value {
 }
 
 impl Value {
-    /// Deep clone — all values are implicitly cloned in Level 0
     pub fn crust_clone(&self) -> Value {
         self.clone()
     }
 
-    /// Display format (for {} in println!)
     pub fn display_fmt(&self) -> String {
         match self {
             Value::Int(n) => n.to_string(),
             Value::Float(f) => {
-                if *f == (*f as i64) as f64 {
+                if f.fract() == 0.0 && f.abs() < 1e15 {
                     format!("{}", *f as i64)
                 } else {
                     format!("{}", f)
@@ -47,7 +45,7 @@ impl Value {
             Value::Struct { name, fields } => {
                 let f: Vec<String> = fields
                     .iter()
-                    .map(|(k, v)| format!("{}: {}", k, v.debug_fmt()))
+                    .map(|(k, v)| format!("{}: {}", k, v.display_fmt()))
                     .collect();
                 format!("{} {{ {} }}", name, f.join(", "))
             }
@@ -56,7 +54,6 @@ impl Value {
         }
     }
 
-    /// Debug format (for {:?} in println!)
     pub fn debug_fmt(&self) -> String {
         match self {
             Value::Int(n) => n.to_string(),
@@ -87,6 +84,19 @@ impl Value {
             Value::String(s) => !s.is_empty(),
             Value::Unit => false,
             _ => true,
+        }
+    }
+
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Int(_) => "Int",
+            Value::Float(_) => "Float",
+            Value::Bool(_) => "Bool",
+            Value::String(_) => "String",
+            Value::Vec(_) => "Vec",
+            Value::Struct { .. } => "Struct",
+            Value::Fn { .. } => "Fn",
+            Value::Unit => "()",
         }
     }
 }

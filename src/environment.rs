@@ -1,6 +1,6 @@
+use crate::value::Value;
 /// Variable environment with lexical scoping for Crust.
 use std::collections::HashMap;
-use crate::value::Value;
 
 #[derive(Debug, Clone)]
 pub struct Environment {
