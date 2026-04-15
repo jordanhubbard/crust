@@ -1,215 +1,273 @@
-# Crust — Design Document
+# Crust — Technical Design
 
-> "rustc backwards" — an interpreted Rust that starts easy and gets strict on demand.
+## One-Liner
 
-## 1. Vision
-
-Crust is an interpreter and graduated-strictness toolchain for Rust. It lets developers write Rust with Python-level friction, then progressively opt into full Rust strictness when they need performance, safety guarantees, or audit readiness.
-
-The core insight: **the borrow checker isn't the enemy — forcing it on day one is.** Crust defers ownership semantics until the developer is ready, using implicit cloning and reference counting as training wheels that can be removed.
-
-## 2. Strictness Gradient
-
-| Level | Flag | Behavior |
-|-------|------|----------|
-| 0 — Explore | `crust run` (default) | Implicit `Clone`, `Arc`-wrapped references, relaxed type inference, `fn main()` optional, REPL mode available |
-| 1 — Develop | `--strict=1` | Warn on implicit clones, suggest explicit ownership, enforce basic type annotations |
-| 2 — Harden | `--strict=2` / `--pedantic` | Borrow checker ON, lifetime annotations required where ambiguous, clippy-level lints |
-| 3 — Ship | `--strict=3` / `--audit-ready` | Full `rustc` semantics, zero implicit allocations, `unsafe` audit, deterministic builds |
-
-The migration path is: write at level 0, `crust migrate --to=3` emits a diff showing exactly what needs to change.
-
-## 3. Architecture
-
-```
-                    ┌──────────────┐
-   .rs / .crust ──▶│    Parser     │──▶ Crust AST
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │  Desugaring  │  ← Implicit Clone/Arc insertion,
-                    │   & Lowering │    main() wrapping, type inference
-                    └──────┬───────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-        ┌──────────┐ ┌──────────┐ ┌──────────┐
-        │Interpreter│ │ Cranelift│ │  rustc   │
-        │ (tree-    │ │   JIT    │ │ codegen  │
-        │  walk)    │ │          │ │          │
-        └──────────┘ └──────────┘ └──────────┘
-         Level 0      Level 0-2    Level 2-3
-         REPL/scripts  fast builds  production
-```
-
-### 3.1 Parser
-
-- Parse standard Rust syntax via `syn` (the Rust `syn` crate, used as a library)
-- Extended syntax for Crust sugar: bare expressions at top level, `?` without Result wrapping, optional semicolons
-- `.crust` file extension for files using extended syntax; `.rs` files parsed as standard Rust
-
-### 3.2 Desugaring Layer (the magic)
-
-This is where strictness levels are applied:
-
-- **Level 0**: Every owned value is implicitly `Clone`-able. References become `Arc<T>` under the hood. `let x = expensive_thing()` followed by `let y = x` just clones. No moves, no borrowing errors.
-- **Level 1**: Same transforms but with warnings: "implicit clone of `x` here — consider `x.clone()` or `&x`"
-- **Level 2**: Transforms removed. Real borrow checker semantics. Lifetime elision rules apply normally.
-- **Level 3**: No desugaring at all — pure `rustc` passthrough.
-
-### 3.3 Backends
-
-**Tree-walk interpreter** (MVP, level 0 only):
-- Direct AST interpretation, no compilation step
-- Good for REPL, scripting, rapid prototyping
-- Performance isn't the point — developer speed is
-
-**Cranelift JIT** (phase 2):
-- Compile Crust AST → Cranelift IR → native code in memory
-- Sub-second compile times, near-native performance
-- Supports levels 0–2
-
-**rustc codegen** (phase 3):
-- Emit desugared Rust source → feed to `rustc`
-- For level 2–3, this IS the production path
-- `crust build --release` = emit clean Rust + `cargo build --release`
-
-## 4. Module Breakdown
-
-```
-crust/
-├── Cargo.toml
-├── src/
-│   ├── main.rs              # CLI entry point
-│   ├── lib.rs               # Public API
-│   ├── parser/
-│   │   ├── mod.rs           # Parser orchestration
-│   │   ├── rust_compat.rs   # Standard Rust parsing (via syn)
-│   │   └── crust_sugar.rs   # Extended .crust syntax
-│   ├── ast/
-│   │   ├── mod.rs           # Crust AST types
-│   │   └── visitor.rs       # AST walker trait
-│   ├── desugar/
-│   │   ├── mod.rs           # Desugaring pipeline
-│   │   ├── clone_insert.rs  # Implicit Clone insertion
-│   │   ├── arc_wrap.rs      # Reference → Arc conversion
-│   │   ├── type_infer.rs    # Relaxed type inference
-│   │   └── main_wrap.rs     # Bare expression → fn main()
-│   ├── strictness/
-│   │   ├── mod.rs           # Strictness level config
-│   │   ├── diagnostics.rs   # Warnings/hints per level
-│   │   └── migrate.rs       # Auto-migration between levels
-│   ├── interpret/
-│   │   ├── mod.rs           # Tree-walk interpreter
-│   │   ├── env.rs           # Runtime environment/scoping
-│   │   ├── value.rs         # Runtime value types
-│   │   └── builtins.rs      # Built-in functions (println!, etc.)
-│   ├── jit/                 # (Phase 2) Cranelift backend
-│   │   ├── mod.rs
-│   │   └── codegen.rs
-│   ├── emit/                # (Phase 3) Rust source emission
-│   │   ├── mod.rs
-│   │   └── rustfmt.rs       # Clean output formatting
-│   └── repl/
-│       ├── mod.rs           # REPL loop
-│       └── completion.rs    # Tab completion
-├── tests/
-│   ├── level0/             # Explore mode tests
-│   ├── level1/             # Develop mode tests
-│   ├── level2/             # Harden mode tests
-│   ├── migration/          # Migration tests
-│   └── compat/             # Standard Rust compatibility
-└── examples/
-    ├── hello.crust         # Bare expression demo
-    ├── web_server.crust    # Async with training wheels
-    └── data_pipeline.crust # Clone-heavy code that "just works"
-```
-
-## 5. MVP Scope (Phase 1)
-
-**Goal**: `crust run hello.crust` works. REPL works. Level 0 only.
-
-What's in:
-- Parser for a subset of Rust (let bindings, functions, structs, enums, basic pattern matching, closures)
-- Implicit Clone semantics (no borrow checker)
-- Tree-walk interpreter with runtime values
-- `println!` and basic formatting macros
-- REPL mode (`crust` with no args)
-- `.crust` file support (bare expressions, optional main)
-
-What's deferred:
-- Cranelift JIT (phase 2)
-- Levels 1–3 (phase 2)
-- `crust migrate` (phase 2)
-- Async/await (phase 2)
-- Full standard library (progressive)
-- rustc codegen (phase 3)
-
-## 6. Example: What Level 0 Looks Like
-
-```rust
-// hello.crust — no fn main(), no Result types, no borrow drama
-
-let names = vec!["Alice", "Bob", "Charlie"];
-
-// This would fail in Rust: "value moved here... value used after move"
-// In Crust level 0: silently clones. It just works.
-let greeting = names;
-println!("Original: {:?}", names);  // ← would be a compile error in Rust
-println!("Copy: {:?}", greeting);
-
-// Structs work without derive macros
-struct Point { x: f64, y: f64 }
-
-let p = Point { x: 1.0, y: 2.0 };
-let q = p;  // implicit clone
-println!("p = ({}, {}), q = ({}, {})", p.x, p.y, q.x, q.y);
-
-// String handling without &str vs String confusion
-let name = "world";
-let message = "Hello, " + name + "!";  // string concat just works
-println!("{message}");
-```
-
-## 7. Implementation Language
-
-Crust itself is written in Rust. We eat our own dog food at the toolchain level — the interpreter is a Rust binary. This means:
-- We can leverage `syn` for parsing
-- Cranelift integration is natural
-- The `crust build --audit-ready` path literally emits Rust
-
-## 8. Design Decisions
-
-**`.crust` files are a superset of Rust.** Any valid `.rs` file is valid `.crust`. The extensions are additive: bare top-level expressions, optional `fn main()`, `+` string concat, relaxed semicolons. This means level-3 crust code is byte-identical to Rust. No fork, no dialect, no lock-in.
-
-**Crate imports at level 0 use a bundled mini-stdlib.** Level 0 ships with `crust_std` providing ergonomic wrappers around common crates (HTTP, JSON, file I/O, async). `use crust::http` at level 0 becomes `use reqwest` at level 3. The migration tool handles the rewrite.
-
-**Trait resolution uses dynamic dispatch at level 0, monomorphization at level 2+.** Level 0 prioritizes "it just works" over performance. The desugaring layer inserts `dyn Trait` where needed. Level 2 switches to static dispatch. The migration diff shows you every place this changes.
-
-**Error messages always explain what rustc *would* say.** Even at level 0, when crust silently clones, the REPL can show `(hint: rustc would reject this — names was moved on line 4. crust cloned it for you.)` This turns the interpreter into a teaching tool.
-
-**WASM target is phase 4.** A browser playground is high-value for adoption but not on the critical path. The interpreter's tree-walk architecture is WASM-friendly by design.
-
-## 9. The Competitive Landscape
-
-| Tool | What It Does | Why It's Not Enough |
-|------|-------------|-------------------|
-| Rust Playground | Browser REPL | Full rustc semantics — still hits the wall |
-| Mojo | Python superset → fast | Different language. Proprietary. Not Rust. |
-| Zig | Simple systems language | No Rust ecosystem. No graduated strictness. |
-| PyO3 / rust-cpython | Rust ↔ Python FFI | Glue code, not migration. Two languages forever. |
-| Rust `clippy` | Lint suggestions | Post-hoc. Doesn't change the entry barrier. |
-
-Crust is the only tool that makes Rust code progressively stricter while maintaining a single codebase that converges to standard Rust.
-
-## 10. Key Metrics
-
-- **Time to first program**: Target <30 seconds for a developer with Python experience (level 0)
-- **Migration coverage**: `crust migrate --to=3` should handle >90% of transforms automatically
-- **Rustc compatibility**: Level-3 output must pass `cargo clippy` and `cargo test` unmodified
-- **Performance at level 0**: Within 10x of native Rust (acceptable for prototyping; Cranelift JIT closes the gap)
+Python in, Rust out. Accept `.py` files, emit `.rs`, compile to native binaries via `rustc`.
 
 ---
 
-*Authors: Natasha, Rocky, t peps*
-*Status: Architecture finalized — implementation on v0.2-dev branch*
+## Architecture
+
+```
+                         crust run / crust build
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────┐
+│                      FRONTEND                            │
+│                                                          │
+│  .py source ──▶ Python Parser ──▶ Crust IR (typed AST)  │
+│                 (tree-sitter /                            │
+│                  RustPython)                              │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────┐
+│                   TYPE INFERENCE                          │
+│                                                          │
+│  Hindley-Milner unification over Crust IR                │
+│  + type hint extraction (PEP 484/526/544)                │
+│  + fallback: dynamic dispatch via enum Value             │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────┐
+│                   RUST CODEGEN                            │
+│                                                          │
+│  Crust IR ──▶ Rust AST ──▶ .rs source text               │
+│                                                          │
+│  Ownership analysis:                                     │
+│    - Single-use values → move                            │
+│    - Multi-use values → clone (Level 0) / borrow (L2+)  │
+│    - Escape analysis for heap vs stack                   │
+│                                                          │
+│  --emit-rs flag: write .rs alongside binary              │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────┐
+│                    BACKEND                                │
+│                                                          │
+│  crust run:   interpret via Crust IR directly            │
+│  crust build: .rs ──▶ rustc -C opt-level=2 ──▶ binary   │
+└──────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Core Translation Rules
+
+### Types
+
+| Python | Crust IR | Rust |
+|--------|----------|------|
+| `int` | `Int` | `i64` |
+| `float` | `Float` | `f64` |
+| `str` | `Str` | `String` |
+| `bool` | `Bool` | `bool` |
+| `None` | `Unit` | `()` |
+| `list[T]` | `List(T)` | `Vec<T>` |
+| `dict[K, V]` | `Map(K, V)` | `HashMap<K, V>` |
+| `set[T]` | `Set(T)` | `HashSet<T>` |
+| `tuple[A, B]` | `Tuple(A, B)` | `(A, B)` |
+| `Optional[T]` | `Option(T)` | `Option<T>` |
+| No annotation | `Inferred` | H-M unification result |
+
+### Functions
+
+```python
+# Python
+def add(a: int, b: int) -> int:
+    return a + b
+```
+
+```rust
+// Emitted Rust
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+```
+
+Untyped functions use Hindley-Milner inference. If inference fails (truly dynamic code), the function operates on `enum Value` with runtime dispatch.
+
+### Classes → Structs + Impl
+
+```python
+class Point:
+    def __init__(self, x: float, y: float):
+        self.x = x
+        self.y = y
+
+    def distance(self, other: 'Point') -> float:
+        return ((self.x - other.x)**2 + (self.y - other.y)**2)**0.5
+```
+
+```rust
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+impl Point {
+    fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+
+    fn distance(&self, other: &Point) -> f64 {
+        ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
+    }
+}
+```
+
+### Error Handling
+
+```python
+# Python exceptions
+try:
+    value = int(input())
+except ValueError:
+    value = 0
+```
+
+```rust
+// Emitted Rust
+let value = match input().parse::<i64>() {
+    Ok(v) => v,
+    Err(_) => 0,
+};
+```
+
+Crust maps `try/except` to `match` on `Result`. Unhandled exceptions become `.unwrap()` at Level 0 and `?` propagation at Level 2+.
+
+### Iterators & Comprehensions
+
+```python
+squares = [x**2 for x in range(10) if x % 2 == 0]
+```
+
+```rust
+let squares: Vec<i64> = (0..10)
+    .filter(|x| x % 2 == 0)
+    .map(|x| x.pow(2))
+    .collect();
+```
+
+List comprehensions → iterator chains. Generator expressions → lazy iterators. This is where Python developers accidentally learn Rust's best feature.
+
+---
+
+## Ownership Strategy
+
+The hardest problem: Python has a GC. Rust doesn't.
+
+### Level 0 (default): Clone Everything
+
+At Level 0, every value that's used more than once gets cloned. This is "wrong" from a Rust purist perspective but *correct* from a Python semantics perspective — Python objects are reference-counted and effectively cloned on use.
+
+The generated Rust is correct, safe, and runs. It's just not zero-cost. And it's still 50-100x faster than CPython.
+
+### Level 1: Warn on Clones
+
+Crust emits the binary but also prints:
+```
+hint: `data` is cloned 3 times — consider passing by reference
+hint: `process(data)` takes ownership — last use, no clone needed
+```
+
+### Level 2: Borrow by Default
+
+Crust performs escape analysis and generates `&` / `&mut` references where possible. Clones only where necessary. Lifetime annotations inferred.
+
+### Level 3: Full Rust
+
+No implicit clones. The generated Rust would pass `cargo clippy` with zero warnings. If the Python code can't be expressed without clones, Crust errors with a suggestion.
+
+---
+
+## Python Stdlib Mapping
+
+Not everything translates. Crust maintains a stdlib compatibility layer:
+
+### Tier 1 — Direct mapping (ships in v0.2)
+- `print()` → `println!()`
+- `len()` → `.len()`
+- `range()` → `Range` / iterator
+- `str.split/join/strip/replace` → `String` methods
+- `list.append/pop/sort` → `Vec` methods
+- `dict` operations → `HashMap` methods
+- `math.*` → `f64` methods / `std::f64::consts`
+- `os.path` → `std::path::Path`
+- `json` → `serde_json`
+- `re` → `regex` crate
+- `sys.argv` → `std::env::args()`
+
+### Tier 2 — Crate-backed (v0.3)
+- `requests` → `reqwest`
+- `datetime` → `chrono`
+- `collections` → `std::collections`
+- `itertools` → `itertools` crate
+- `typing` → native Rust types
+
+### Tier 3 — Runtime shim (v0.4)
+- `asyncio` → `tokio`
+- `threading` → `std::thread` + `rayon`
+- `subprocess` → `std::process::Command`
+- `sqlite3` → `rusqlite`
+
+### Escape Hatch — FFI
+For anything that can't translate (numpy, pandas, torch), Crust generates FFI bindings against the existing Python C extensions via PyO3. Your hot loop is native Rust; your numpy call goes through FFI. Still faster than pure CPython.
+
+---
+
+## Parser Strategy
+
+Two options evaluated:
+
+### Option A: tree-sitter-python (chosen for v0.2)
+- Mature, battle-tested, incremental
+- Concrete syntax tree preserves all source info
+- Rust bindings via `tree-sitter` crate
+- Same parser VS Code / Neovim use
+
+### Option B: RustPython parser
+- Full Python 3.12 grammar
+- Produces Python AST directly
+- More complete but heavier dependency
+
+v0.2 uses tree-sitter for speed and incrementality. RustPython parser is the fallback for edge cases.
+
+---
+
+## What We're Not Building
+
+- **A new language.** Crust accepts standard Python. Period.
+- **A Python runtime.** We don't ship a GC, GIL, or bytecode VM.
+- **A competitor to Mojo/Codon.** Those are new languages with Python syntax. Crust compiles *actual* Python.
+- **A replacement for Rust.** Crust is distribution for Rust. When developers are ready, they graduate to `rustc` directly.
+
+---
+
+## Roadmap
+
+| Version | Milestone |
+|---------|-----------|
+| **0.1** | Foundation — `crust run` and `crust build` pipeline, proof of concept |
+| **0.2** | Python parser (tree-sitter), type inference, basic codegen for functions/classes/iterators |
+| **0.3** | Stdlib Tier 1+2 mapping, `--emit-rs`, strictness Levels 0-1 |
+| **0.4** | Ownership analysis, Levels 2-3, escape analysis, lifetime inference |
+| **0.5** | PyO3 FFI escape hatch, async support via tokio |
+| **1.0** | Production-grade — handles real-world Python codebases, IDE integration |
+
+---
+
+## Prior Art & Differentiation
+
+| Project | Approach | Crust Difference |
+|---------|----------|-----------------|
+| **Mojo** | New language, Python-like syntax | Crust accepts *actual* Python |
+| **Codon** | Python subset → LLVM | Crust targets Rust (inspectable, editable) |
+| **Cython** | Python + C types → C extension | Crust produces standalone binaries |
+| **Nuitka** | Python → C → binary | Bundles CPython runtime; Crust doesn't |
+| **PyO3** | Rust ↔ Python FFI | Crust generates the Rust; PyO3 is our escape hatch |
+| **RPython** | Python subset for PyPy | Language-level VM toolkit, not a user-facing compiler |
+
+The key differentiator: **Crust emits readable Rust.** The output isn't object code or intermediate bytecode — it's `.rs` files a human can read, edit, and maintain. Crust is a migration tool, not a black box.
