@@ -9,15 +9,25 @@ use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::ast::Stmt;
 
+fn history_path() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join(".crust_history"))
+}
+
 pub fn run() {
     let mut rl = DefaultEditor::new().unwrap();
+
+    if let Some(path) = history_path() {
+        let _ = rl.load_history(&path);
+    }
+
     let mut interp = Interpreter::new();
     let env = Rc::new(RefCell::new(Env::new()));
 
-    println!("crust {} — type :quit to exit", env!("CARGO_PKG_VERSION"));
+    println!("crust {} — Rust interpreter (Level 0)", env!("CARGO_PKG_VERSION"));
+    println!("Type :help for commands, :quit to exit.\n");
 
     let mut pending = String::new();
-    let mut depth = 0usize; // track open braces for multi-line input
+    let mut depth = 0usize;
 
     loop {
         let prompt = if pending.is_empty() { ">> " } else { ".. " };
@@ -36,6 +46,16 @@ pub fn run() {
         match trimmed {
             ":quit" | ":exit" | ":q" => { println!("Bye."); break; }
             ":clear" => { pending.clear(); depth = 0; continue; }
+            ":help" => {
+                print_help();
+                rl.add_history_entry(trimmed).ok();
+                continue;
+            }
+            ":vars" => {
+                show_vars(&interp, &env);
+                rl.add_history_entry(trimmed).ok();
+                continue;
+            }
             s if s.starts_with(":type ") => {
                 let expr_src = &s[6..];
                 let src = format!("fn __repl_type__() {{ {} }}", expr_src);
@@ -63,22 +83,81 @@ pub fn run() {
         depth += trimmed.chars().filter(|&c| c == '{').count();
         depth = depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
 
-        if depth > 0 { continue; } // wait for more input
+        if depth > 0 { continue; }
 
         let src = std::mem::take(&mut pending);
         rl.add_history_entry(src.trim()).ok();
 
-        // Try to evaluate as a complete unit
         match eval_repl_input(&src, &mut interp, Rc::clone(&env)) {
             Ok(Some(val)) => {
                 if !matches!(val, crate::value::Value::Unit) {
-                    println!("{}", val);
+                    println!("{}", val.debug_repr());
                 }
             }
             Ok(None) => {}
             Err(e) => eprintln!("error: {}", e),
         }
     }
+
+    if let Some(path) = history_path() {
+        let _ = rl.save_history(&path);
+    }
+}
+
+fn print_help() {
+    println!("Commands:");
+    println!("  :help         Show this help");
+    println!("  :quit / :q    Exit the REPL");
+    println!("  :clear        Clear pending multi-line input");
+    println!("  :vars         Show all defined variables and functions");
+    println!("  :type <expr>  Show the type of an expression");
+    println!();
+    println!("You can enter any Rust expression, statement, or definition:");
+    println!("  >> let x = 42");
+    println!("  >> x * 2");
+    println!("  84");
+    println!("  >> fn double(n: i64) -> i64 {{ n * 2 }}");
+    println!("  >> double(21)");
+    println!("  42");
+}
+
+fn show_vars(interp: &Interpreter, env: &Rc<RefCell<Env>>) {
+    let vars = env.borrow().all_names();
+    if !vars.is_empty() {
+        println!("Variables:");
+        let mut names: Vec<_> = vars.into_iter().collect();
+        names.sort();
+        for name in &names {
+            if let Some(val) = env.borrow().get(name) {
+                println!("  {} : {} = {}", name, val.type_name(), val.debug_repr());
+            }
+        }
+    }
+    let fns: Vec<_> = interp.fn_names();
+    if !fns.is_empty() {
+        println!("Functions:");
+        let mut sorted = fns;
+        sorted.sort();
+        for name in &sorted {
+            println!("  fn {}(..)", name);
+        }
+    }
+    if env.borrow().all_names().is_empty() && interp.fn_names().is_empty() {
+        println!("(no definitions yet)");
+    }
+}
+
+fn is_item_start(src: &str) -> bool {
+    let t = src.trim();
+    t.starts_with("fn ")
+        || t.starts_with("pub fn ")
+        || t.starts_with("struct ")
+        || t.starts_with("enum ")
+        || t.starts_with("impl ")
+        || t.starts_with("pub ")
+        || t.starts_with("const ")
+        || t.starts_with("type ")
+        || t.starts_with("use ")
 }
 
 fn eval_repl_input(
@@ -89,12 +168,7 @@ fn eval_repl_input(
     let tokens = Lexer::new(src).tokenize()?;
     let mut parser = Parser::new(tokens);
 
-    // Try parsing as an item first (fn, struct, impl, etc.)
-    // Heuristic: if starts with fn/struct/enum/impl, it's an item
-    let trimmed = src.trim();
-    if trimmed.starts_with("fn ") || trimmed.starts_with("struct ") ||
-       trimmed.starts_with("enum ") || trimmed.starts_with("impl ") ||
-       trimmed.starts_with("pub ") {
+    if is_item_start(src) {
         let prog = parser.parse_program()?;
         for item in prog {
             interp.register_item_pub(item)?;
@@ -102,7 +176,6 @@ fn eval_repl_input(
         return Ok(None);
     }
 
-    // Try parsing as a block of statements
     let src_block = format!("fn __repl__() {{ {} }}", src);
     let tokens2 = Lexer::new(&src_block).tokenize()?;
     let mut p2 = Parser::new(tokens2);
@@ -111,7 +184,6 @@ fn eval_repl_input(
     if let Some(crate::ast::Item::Fn(fndef)) = prog.first() {
         let child = Rc::new(RefCell::new(crate::env::Env::child(Rc::clone(&env))));
 
-        // Execute statements, persist definitions in outer env
         for stmt in &fndef.body.stmts {
             match stmt {
                 Stmt::Let { name, init, .. } => {

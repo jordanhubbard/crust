@@ -13,3 +13,4 @@ path = "src/main.rs"
 [dependencies]
 thiserror = "2"
 rustyline = "14"
+dirs = "5"

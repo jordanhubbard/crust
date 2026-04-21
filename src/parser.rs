@@ -341,14 +341,11 @@ impl Parser {
                 }
             }
             TokenKind::Not => { self.advance(); Ok(Ty::Never) }
-            TokenKind::And => {
+            TokenKind::And | TokenKind::AndAnd => {
+                // `&&T` or `&T` — both become a single ref at Level 0
                 self.advance();
-                // skip lifetime
                 if matches!(self.peek(), TokenKind::Ident(_)) {
-                    if let TokenKind::Ident(s) = self.peek().clone() {
-                        // lifetimes were already stripped by lexer, but just in case
-                        let _ = s;
-                    }
+                    // skip lifetime annotation if present
                 }
                 let mutable = self.eat(&TokenKind::Mut);
                 let inner = self.parse_ty()?;
@@ -627,15 +624,27 @@ impl Parser {
                         }
                         _ => {
                             let field = self.expect_ident()?;
-                            // turbofish: expr.method::<T>(args)
+                            // turbofish: expr.method::<T>(args) — capture the first type name
                             let turbofish = if self.check(&TokenKind::ColonColon) {
                                 self.advance();
                                 if self.check(&TokenKind::Lt) {
-                                    let start = self.pos;
-                                    self.skip_generics();
-                                    // capture the turbofish text (we'll store it but not use it at Level 0)
-                                    let _ = start;
-                                    Some("_".to_string())
+                                    self.advance(); // consume <
+                                    let ty_name = match self.peek().clone() {
+                                        TokenKind::Ident(s) => { self.advance(); s }
+                                        _ => "_".to_string(),
+                                    };
+                                    // skip rest of the generic args
+                                    let mut depth = 1i32;
+                                    loop {
+                                        match self.peek() {
+                                            TokenKind::Lt  => { depth += 1; self.advance(); }
+                                            TokenKind::Gt  => { depth -= 1; self.advance(); if depth <= 0 { break; } }
+                                            TokenKind::Shr => { depth -= 2; self.advance(); if depth <= 0 { break; } }
+                                            TokenKind::Eof => break,
+                                            _ => { self.advance(); }
+                                        }
+                                    }
+                                    Some(ty_name)
                                 } else { None }
                             } else { None };
                             if self.check(&TokenKind::LParen) {
@@ -786,22 +795,19 @@ impl Parser {
                     self.expect(&TokenKind::Eq)?;
                     let scrutinee = self.parse_expr(0)?;
                     let then_block = self.parse_block()?;
-                    let else_block = if self.eat(&TokenKind::Else) {
+                    let else_expr = if self.eat(&TokenKind::Else) {
                         if self.check(&TokenKind::If) {
                             Some(Box::new(self.parse_expr(0)?))
                         } else {
                             Some(Box::new(Expr::Block(self.parse_block()?)))
                         }
                     } else { None };
-                    // Wrap as `if let` — we'll handle specially in eval
-                    return Ok(Expr::Match {
-                        scrutinee: Box::new(scrutinee),
-                        arms: vec![MatchArm {
-                            pat: _pat,
-                            guard: None,
-                            body: Expr::Block(then_block),
-                        }],
-                    });
+                    // Build match arms; add wildcard arm for the else branch if present
+                    let mut arms = vec![MatchArm { pat: _pat, guard: None, body: Expr::Block(then_block) }];
+                    if let Some(else_b) = else_expr {
+                        arms.push(MatchArm { pat: Pat::Wild, guard: None, body: *else_b });
+                    }
+                    return Ok(Expr::Match { scrutinee: Box::new(scrutinee), arms });
                 }
                 let cond = Box::new(self.parse_expr(0)?);
                 let then_block = self.parse_block()?;
@@ -829,16 +835,14 @@ impl Parser {
                     let break_arm = MatchArm { pat: Pat::Wild, guard: None, body: Expr::Break(None) };
                     let match_arm = MatchArm { pat, guard: None, body: Expr::Block(body) };
                     let match_expr = Expr::Match { scrutinee: Box::new(scrutinee), arms: vec![match_arm, break_arm] };
-                    return Ok(Expr::Block(Block { stmts: vec![], tail: Some(Box::new(
-                        Expr::Match {
-                            scrutinee: Box::new(Expr::Lit(Lit::Bool(true))),
-                            arms: vec![MatchArm {
-                                pat: Pat::Lit(Lit::Bool(true)),
-                                guard: None,
-                                body: match_expr,
-                            }],
-                        }
-                    ))}));
+                    return Ok(Expr::Match {
+                        scrutinee: Box::new(Expr::Lit(Lit::Bool(true))),
+                        arms: vec![MatchArm {
+                            pat: Pat::Ident("__loop__".into()),
+                            guard: None,
+                            body: match_expr,
+                        }],
+                    });
                 }
                 let cond = Box::new(self.parse_expr(0)?);
                 let body_block = self.parse_block()?;

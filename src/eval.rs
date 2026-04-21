@@ -71,6 +71,10 @@ impl Interpreter {
         self.eval_stmt(stmt, env)
     }
 
+    pub fn fn_names(&self) -> Vec<String> {
+        self.fns.keys().cloned().collect()
+    }
+
     fn register_item(&mut self, item: Item) -> Result<(), CrustError> {
         match item {
             Item::Fn(def) => {
@@ -214,18 +218,35 @@ impl Interpreter {
                 if let Some(cfn) = self.fns.get(name).cloned() {
                     return Ok(Value::Fn(cfn));
                 }
-                Err(err(format!("undefined variable: {}", name)))
+                // Fall back: zero-arg builtins like `None`
+                if let Some(r) = crate::stdlib::call_builtin(name, vec![], self) {
+                    return r;
+                }
+                let hint = if name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                    " (if this is an enum variant, make sure it's constructed with `Type::Variant` or `Variant(args)`)"
+                } else { "" };
+                Err(err(format!("undefined variable: `{}`{}", name, hint)))
             }
 
             Expr::Path(parts) => {
-                // Handle None, Some, Ok, Err, enum variants
+                // Handle None, Some, Ok, Err, enum variants, and constants like i64::MAX
                 match parts.as_slice() {
                     [only] => env.borrow().get(only)
                         .ok_or_else(|| err(format!("undefined: {}", only))),
                     _ => {
                         let name = parts.last().unwrap().clone();
+                        let type_name = parts[parts.len()-2].clone();
+                        // Try as zero-arg static / constant (e.g. i64::MAX, f64::INFINITY)
+                        let qualified = format!("{}::{}", type_name, name);
+                        if let Some(r) = crate::stdlib::call_builtin(&qualified, vec![], self) {
+                            return r;
+                        }
+                        // Try as zero-arg method (may cover more constants)
+                        if let Ok(v) = self.call_method_or_static(&type_name, &name, None, vec![], Rc::clone(&env)) {
+                            return Ok(v);
+                        }
+                        // Fall back: enum variant constructor
                         let type_name = parts[..parts.len()-1].join("::");
-                        // Try as enum variant constructor
                         Ok(Value::Enum { type_name, variant: name, inner: None })
                     }
                 }
@@ -300,9 +321,17 @@ impl Interpreter {
                 }
             }
 
-            Expr::MethodCall { receiver, method, args, .. } => {
+            Expr::MethodCall { receiver, method, turbofish, args } => {
+                // Remap collect based on turbofish: collect::<String>() → "collect_string"
+                let method_str: String = if method == "collect" {
+                    match turbofish.as_deref() {
+                        Some("String") => "collect_string".to_string(),
+                        _ => method.clone(),
+                    }
+                } else { method.clone() };
+                let method: &str = &method_str;
                 // Special-case: map.entry(k).or_insert(v) / or_insert_with(f)
-                if matches!(method.as_str(), "or_insert" | "or_insert_with" | "or_default") {
+                if matches!(method, "or_insert" | "or_insert_with" | "or_default") {
                     if let Expr::MethodCall { receiver: map_expr, method: entry_m, args: entry_args, .. } = receiver.as_ref() {
                         if entry_m == "entry" {
                             if let Some(map_var) = match map_expr.as_ref() { Expr::Ident(n) => Some(n.clone()), _ => None } {
@@ -965,6 +994,16 @@ pub fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         (Float(x), Int(y))   => x.partial_cmp(&(*y as f64)),
         (Str(x), Str(y))     => x.partial_cmp(y),
         (Bool(x), Bool(y))   => x.partial_cmp(y),
+        (Char(x), Char(y))   => x.partial_cmp(y),
+        (Tuple(a), Tuple(b)) => {
+            for (x, y) in a.iter().zip(b.iter()) {
+                match compare_values(x, y) {
+                    Some(std::cmp::Ordering::Equal) => continue,
+                    other => return other,
+                }
+            }
+            a.len().partial_cmp(&b.len())
+        }
         _                    => None,
     }
 }

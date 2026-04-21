@@ -266,20 +266,24 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
         // Misc
         "drop" => Some(Ok(Value::Unit)),
         "clone" => Some(Ok(args.into_iter().next().unwrap_or(Value::Unit))),
-        "String::new" => Some(Ok(Value::Str(String::new()))),
-        "String::from" | "String::from_str" => {
-            let s = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-            Some(Ok(Value::Str(s)))
-        }
         "String::with_capacity" => Some(Ok(Value::Str(String::new()))),
-        "Vec::new" | "Vec::new()" => Some(Ok(Value::Vec(Vec::new()))),
-        "Vec::with_capacity" => Some(Ok(Value::Vec(Vec::new()))),
-        "println" | "print" | "eprintln" | "eprint" => {
-            let s = args.into_iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
-            println!("{}", s);
-            interp.output.push(s);
-            Some(Ok(Value::Unit))
-        }
+
+        // f64 constants
+        "f64::INFINITY" | "std::f64::INFINITY" => Some(Ok(Value::Float(f64::INFINITY))),
+        "f64::NEG_INFINITY" | "std::f64::NEG_INFINITY" => Some(Ok(Value::Float(f64::NEG_INFINITY))),
+        "f64::NAN" | "std::f64::NAN" => Some(Ok(Value::Float(f64::NAN))),
+        "f64::MAX" | "std::f64::MAX" => Some(Ok(Value::Float(f64::MAX))),
+        "f64::MIN" | "std::f64::MIN" => Some(Ok(Value::Float(f64::MIN))),
+        "f64::MIN_POSITIVE" => Some(Ok(Value::Float(f64::MIN_POSITIVE))),
+        "f64::EPSILON" => Some(Ok(Value::Float(f64::EPSILON))),
+        "f64::PI" | "std::f64::consts::PI" => Some(Ok(Value::Float(std::f64::consts::PI))),
+        "f64::E" | "std::f64::consts::E" => Some(Ok(Value::Float(std::f64::consts::E))),
+
+        // usize/u32 constants
+        "usize::MAX" => Some(Ok(Value::Int(usize::MAX as i64))),
+        "u32::MAX" => Some(Ok(Value::Int(u32::MAX as i64))),
+        "i32::MAX" => Some(Ok(Value::Int(i32::MAX as i64))),
+        "i32::MIN" => Some(Ok(Value::Int(i32::MIN as i64))),
 
         _ => None,
     }
@@ -442,15 +446,16 @@ pub fn call_method(
                 Some(Ok(Value::Vec(pairs)))
             } else { None }
         }
-        (Value::Vec(_), "collect") => {
-            if let Value::Vec(ref v) = recv {
-                // If all elements are chars, collect into String
-                if !v.is_empty() && v.iter().all(|x| matches!(x, Value::Char(_))) {
-                    let s: String = v.iter().map(|x| match x { Value::Char(c) => *c, _ => '?' }).collect();
-                    return Some(Ok(Value::Str(s)));
-                }
-            }
-            Some(Ok(recv))
+        (Value::Vec(_), "collect") => Some(Ok(recv)),
+        (Value::Vec(_), "collect_string") => {
+            // collect::<String>() — join chars/strings into a String
+            if let Value::Vec(v) = recv {
+                let s: String = v.iter().map(|x| match x {
+                    Value::Char(c) => c.to_string(),
+                    other => other.to_string(),
+                }).collect();
+                Some(Ok(Value::Str(s)))
+            } else { None }
         }
         (Value::Vec(_), "count") => {
             if let Value::Vec(v) = recv { Some(Ok(Value::Int(v.len() as i64))) } else { None }
@@ -686,14 +691,6 @@ pub fn call_method(
                 Some(Ok(Value::Vec(parts)))
             } else { None }
         }
-        (Value::Str(_), "splitn") => {
-            if let Value::Str(s) = recv {
-                let n = match args.first() { Some(Value::Int(n)) => *n as usize, _ => 0 };
-                let sep = args.into_iter().nth(1).map(|v| v.to_string()).unwrap_or_default();
-                let parts: Vec<Value> = s.splitn(n, &sep[..]).map(|p| Value::Str(p.to_string())).collect();
-                Some(Ok(Value::Vec(parts)))
-            } else { None }
-        }
         (Value::Str(_), "split_whitespace" | "split_ascii_whitespace") => {
             if let Value::Str(s) = recv {
                 let ws: Vec<Value> = s.split_whitespace().map(|w| Value::Str(w.to_string())).collect();
@@ -757,6 +754,78 @@ pub fn call_method(
             } else { None }
         }
         (Value::Str(_), "to_string" | "clone") => Some(Ok(recv)),
+        (Value::Str(_), "find") => {
+            if let Value::Str(s) = recv {
+                let pat = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                Some(Ok(Value::Option_(s.find(&*pat).map(|i| Box::new(Value::Int(i as i64))))))
+            } else { None }
+        }
+        (Value::Str(_), "rfind") => {
+            if let Value::Str(s) = recv {
+                let pat = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                Some(Ok(Value::Option_(s.rfind(&*pat).map(|i| Box::new(Value::Int(i as i64))))))
+            } else { None }
+        }
+        (Value::Str(_), "get") => {
+            if let Value::Str(s) = recv {
+                match args.into_iter().next() {
+                    Some(Value::Range(a, b, inc)) => {
+                        let end = if inc { b + 1 } else { b } as usize;
+                        Some(Ok(Value::Option_(s.get(a as usize..end).map(|r| Box::new(Value::Str(r.to_string()))))))
+                    }
+                    _ => Some(Ok(Value::Option_(None))),
+                }
+            } else { None }
+        }
+        (Value::Str(_), "chars_count" | "char_count") => {
+            if let Value::Str(s) = recv { Some(Ok(Value::Int(s.chars().count() as i64))) } else { None }
+        }
+        (Value::Str(_), "splitn") => {
+            if let Value::Str(s) = recv {
+                let mut it = args.into_iter();
+                let n = match it.next() { Some(Value::Int(n)) => n as usize, _ => 2 };
+                let pat = it.next().map(|v| v.to_string()).unwrap_or_default();
+                let parts: Vec<Value> = s.splitn(n, &*pat).map(|p| Value::Str(p.to_string())).collect();
+                Some(Ok(Value::Vec(parts)))
+            } else { None }
+        }
+        (Value::Str(_), "trim_matches") => {
+            if let Value::Str(s) = recv {
+                let pat = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                let ch: char = pat.chars().next().unwrap_or(' ');
+                Some(Ok(Value::Str(s.trim_matches(ch).to_string())))
+            } else { None }
+        }
+        (Value::Str(_), "trim_start_matches") => {
+            if let Value::Str(s) = recv {
+                let pat = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                Some(Ok(Value::Str(s.trim_start_matches(&*pat).to_string())))
+            } else { None }
+        }
+        (Value::Str(_), "trim_end_matches") => {
+            if let Value::Str(s) = recv {
+                let pat = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                Some(Ok(Value::Str(s.trim_end_matches(&*pat).to_string())))
+            } else { None }
+        }
+        (Value::Str(_), "replacen") => {
+            if let Value::Str(s) = recv {
+                let mut it = args.into_iter();
+                let from = it.next().map(|v| v.to_string()).unwrap_or_default();
+                let to = it.next().map(|v| v.to_string()).unwrap_or_default();
+                let n = match it.next() { Some(Value::Int(n)) => n as usize, _ => 1 };
+                Some(Ok(Value::Str(s.replacen(&*from, &to, n))))
+            } else { None }
+        }
+        (Value::Str(_), "char_indices") => {
+            if let Value::Str(s) = recv {
+                let pairs: Vec<Value> = s.char_indices()
+                    .map(|(i, c)| Value::Tuple(vec![Value::Int(i as i64), Value::Char(c)]))
+                    .collect();
+                Some(Ok(Value::Vec(pairs)))
+            } else { None }
+        }
+        (Value::Str(_), "as_bytes" | "as_str") => Some(Ok(recv)),
         (Value::Str(_), "push_str") => {
             // In Rust this mutates; at Level 0 we return a concatenated string
             if let Value::Str(mut s) = recv {
@@ -1240,6 +1309,94 @@ pub fn call_method(
             } else {
                 Some(Ok(Value::Bool(false)))
             }
+        }
+        (Value::Range(start, end, inclusive), "fold" | "fold_first") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end = if inc { e + 1 } else { e };
+            let mut it = args.into_iter();
+            let mut acc = it.next().unwrap_or(Value::Unit);
+            let func = it.next().unwrap_or(Value::Unit);
+            if let Value::Fn(cfn) = func {
+                for n in s..end {
+                    match interp.call_crust_fn(&cfn, vec![acc, Value::Int(n)], None) {
+                        Ok(v) => acc = v,
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+            }
+            Some(Ok(acc))
+        }
+        (Value::Range(start, end, inclusive), "enumerate") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end = if inc { e + 1 } else { e };
+            let pairs: Vec<Value> = (s..end).enumerate()
+                .map(|(i, n)| Value::Tuple(vec![Value::Int(i as i64), Value::Int(n)]))
+                .collect();
+            Some(Ok(Value::Vec(pairs)))
+        }
+        (Value::Range(start, end, inclusive), "flat_map") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end = if inc { e + 1 } else { e };
+            let func = args.into_iter().next().unwrap_or(Value::Unit);
+            let mut result = Vec::new();
+            if let Value::Fn(cfn) = func {
+                for n in s..end {
+                    match interp.call_crust_fn(&cfn, vec![Value::Int(n)], None) {
+                        Ok(Value::Vec(v)) => result.extend(v),
+                        Ok(v) => result.push(v),
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+            }
+            Some(Ok(Value::Vec(result)))
+        }
+        (Value::Range(start, end, inclusive), "skip") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let n = match args.into_iter().next() { Some(Value::Int(n)) => n, _ => 0 };
+            Some(Ok(Value::Range(s + n, e, inc)))
+        }
+        (Value::Range(start, end, inclusive), "take") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let n = match args.into_iter().next() { Some(Value::Int(n)) => n, _ => 0 };
+            let new_end = (s + n).min(if inc { e + 1 } else { e });
+            Some(Ok(Value::Range(s, new_end, false)))
+        }
+        (Value::Range(start, end, inclusive), "step_by") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let step = match args.into_iter().next() { Some(Value::Int(n)) => n, _ => 1 };
+            let end = if inc { e + 1 } else { e };
+            let v: Vec<Value> = (s..end).step_by(step as usize).map(Value::Int).collect();
+            Some(Ok(Value::Vec(v)))
+        }
+        (Value::Range(start, end, inclusive), "any") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end = if inc { e + 1 } else { e };
+            let func = args.into_iter().next().unwrap_or(Value::Unit);
+            if let Value::Fn(cfn) = func {
+                for n in s..end {
+                    match interp.call_crust_fn(&cfn, vec![Value::Int(n)], None) {
+                        Ok(v) if v.is_truthy() => return Some(Ok(Value::Bool(true))),
+                        Ok(_) => {}
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+            }
+            Some(Ok(Value::Bool(false)))
+        }
+        (Value::Range(start, end, inclusive), "all") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end = if inc { e + 1 } else { e };
+            let func = args.into_iter().next().unwrap_or(Value::Unit);
+            if let Value::Fn(cfn) = func {
+                for n in s..end {
+                    match interp.call_crust_fn(&cfn, vec![Value::Int(n)], None) {
+                        Ok(v) if !v.is_truthy() => return Some(Ok(Value::Bool(false))),
+                        Ok(_) => {}
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+            }
+            Some(Ok(Value::Bool(true)))
         }
         (Value::Range(..), "clone") => Some(Ok(recv)),
 

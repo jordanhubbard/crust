@@ -52,6 +52,10 @@ impl Env {
         if self.vars.contains_key(name) { return true; }
         self.parent.as_ref().map_or(false, |p| p.borrow().has(name))
     }
+
+    pub fn all_names(&self) -> Vec<String> {
+        self.vars.keys().cloned().collect()
+    }
 }
 
 impl Default for Env {
