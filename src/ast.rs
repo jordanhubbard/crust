@@ -36,7 +36,7 @@ pub enum Expr {
     If { cond: Box<Expr>, then_block: Block, else_block: Option<Box<Expr>> },
     Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
     Block(Block),
-    Closure { params: Vec<String>, body: Box<Expr> },
+    Closure { params: Vec<ClosureParam>, body: Box<Expr> },
     StructLit { name: String, fields: Vec<(String, Expr)> },
     Array(Vec<Expr>),
     Tuple(Vec<Expr>),
@@ -114,6 +114,12 @@ pub struct FnDef {
     pub params: Vec<Param>,
     pub ret_ty: Option<Ty>,
     pub body: Block,
+}
+
+#[derive(Debug, Clone)]
+pub enum ClosureParam {
+    Simple(String),
+    Tuple(Vec<String>),
 }
 
 #[derive(Debug, Clone)]

@@ -404,6 +404,17 @@ impl Parser {
                         _ => {}
                     }
                 }
+                // Fn(T) -> R trait syntax
+                if matches!(name.as_str(), "Fn" | "FnMut" | "FnOnce") && self.check(&TokenKind::LParen) {
+                    self.eat(&TokenKind::LParen);
+                    while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
+                        let _ = self.parse_ty()?;
+                        if !self.eat(&TokenKind::Comma) { break; }
+                    }
+                    self.eat(&TokenKind::RParen);
+                    if self.eat(&TokenKind::Arrow) { let _ = self.parse_ty()?; }
+                    return Ok(Ty::Named("fn".to_string()));
+                }
                 if self.check(&TokenKind::Lt) {
                     self.advance();
                     let mut args = Vec::new();
@@ -416,6 +427,12 @@ impl Parser {
                 } else {
                     Ok(Ty::Named(name))
                 }
+            }
+            TokenKind::Impl => {
+                // impl Trait — skip and treat as Named("impl")
+                self.advance();
+                let _ = self.parse_ty()?;  // consume the trait type
+                Ok(Ty::Named("impl".to_string()))
             }
             other => Err(CrustError::parse(format!("expected type, got {:?}", other), self.line())),
         }
@@ -917,12 +934,29 @@ impl Parser {
                     self.advance(); // consume |
                     let mut ps = Vec::new();
                     while !self.check(&TokenKind::Or) && !self.check(&TokenKind::Eof) {
+                        // strip leading refs: &, &&, mut
+                        while self.eat(&TokenKind::And) || self.eat(&TokenKind::AndAnd) {}
                         self.eat(&TokenKind::Mut);
-                        let name = if self.check(&TokenKind::Underscore) { self.advance(); "_".into() }
-                                   else { self.expect_ident()? };
-                        // optional type annotation
-                        if self.eat(&TokenKind::Colon) { let _ = self.parse_ty()?; }
-                        ps.push(name);
+                        if self.eat(&TokenKind::LParen) {
+                            // tuple destructuring: |(k, v)|
+                            let mut names = Vec::new();
+                            while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
+                                self.eat(&TokenKind::Mut);
+                                let n = if self.check(&TokenKind::Underscore) { self.advance(); "_".into() }
+                                        else { self.expect_ident()? };
+                                if self.eat(&TokenKind::Colon) { let _ = self.parse_ty()?; }
+                                names.push(n);
+                                if !self.eat(&TokenKind::Comma) { break; }
+                            }
+                            self.eat(&TokenKind::RParen);
+                            if self.eat(&TokenKind::Colon) { let _ = self.parse_ty()?; }
+                            ps.push(crate::ast::ClosureParam::Tuple(names));
+                        } else {
+                            let name = if self.check(&TokenKind::Underscore) { self.advance(); "_".into() }
+                                       else { self.expect_ident()? };
+                            if self.eat(&TokenKind::Colon) { let _ = self.parse_ty()?; }
+                            ps.push(crate::ast::ClosureParam::Simple(name));
+                        }
                         if !self.eat(&TokenKind::Comma) { break; }
                     }
                     if !self.eat(&TokenKind::Or) {
@@ -1010,9 +1044,26 @@ impl Parser {
             TokenKind::Ident(_) => {
                 i += 1;
                 if i >= len { return false; }
-                // `{ ident: ...` or `{ ident, ...` or `{ ident }` — all struct shorthand
-                matches!(&self.tokens[i].kind,
-                    TokenKind::Colon | TokenKind::Comma | TokenKind::RBrace)
+                match &self.tokens[i].kind {
+                    // `{ field: expr }` — definitely a struct literal
+                    TokenKind::Colon => true,
+                    // `{ field, ... }` — struct shorthand only if next field also ends in `:` or `,`
+                    // Don't match `{ field }` alone (ambiguous with block expression)
+                    TokenKind::Comma => {
+                        // Scan ahead: if any field has `:` it's a struct lit
+                        let mut j = i + 1;
+                        while j < len {
+                            match &self.tokens[j].kind {
+                                TokenKind::Colon => return true,
+                                TokenKind::RBrace => return false,
+                                TokenKind::Eof => return false,
+                                _ => j += 1,
+                            }
+                        }
+                        false
+                    }
+                    _ => false,
+                }
             }
             TokenKind::DotDot => true,
             _ => false,

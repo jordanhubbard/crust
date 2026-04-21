@@ -29,6 +29,7 @@ pub enum Value {
     Range(i64, i64, bool),   // start, end_exclusive_or_inclusive, inclusive
     Option_(Option<Box<Value>>),
     Result_(std::result::Result<Box<Value>, Box<Value>>),
+    EntryRef { map_name: String, key: String },
 }
 
 impl fmt::Display for Value {
@@ -94,6 +95,7 @@ impl fmt::Display for Value {
             Value::Option_(None)    => write!(f, "None"),
             Value::Result_(Ok(v))   => write!(f, "Ok({})", v),
             Value::Result_(Err(e))  => write!(f, "Err({})", e),
+            Value::EntryRef { .. }  => write!(f, "<entry-ref>"),
         }
     }
 }
@@ -116,6 +118,7 @@ impl Value {
             Value::Range(..)     => "Range",
             Value::Option_(_)    => "Option",
             Value::Result_(_)    => "Result",
+            Value::EntryRef { .. } => "EntryRef",
         }
     }
 

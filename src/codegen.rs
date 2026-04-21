@@ -299,7 +299,12 @@ impl Codegen {
             }
 
             Expr::Closure { params, body } => {
-                format!("|{}| {}", params.join(", "), self.emit_expr(body))
+                use crate::ast::ClosureParam;
+                let ps: Vec<String> = params.iter().map(|p| match p {
+                    ClosureParam::Simple(n) => n.clone(),
+                    ClosureParam::Tuple(ns) => format!("({})", ns.join(", ")),
+                }).collect();
+                format!("|{}| {}", ps.join(", "), self.emit_expr(body))
             }
 
             Expr::StructLit { name, fields } => {

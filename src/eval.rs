@@ -197,8 +197,14 @@ impl Interpreter {
             Expr::Lit(lit) => Ok(eval_lit(lit)),
 
             Expr::Ident(name) => {
-                env.borrow().get(name)
-                    .ok_or_else(|| err(format!("undefined variable: {}", name)))
+                if let Some(v) = env.borrow().get(name) {
+                    return Ok(v);
+                }
+                // Fall back to top-level function as a value
+                if let Some(cfn) = self.fns.get(name).cloned() {
+                    return Ok(Value::Fn(cfn));
+                }
+                Err(err(format!("undefined variable: {}", name)))
             }
 
             Expr::Path(parts) => {
@@ -302,9 +308,9 @@ impl Interpreter {
                                             self.call_crust_fn(&cfn, vec![], None)?
                                         } else { v }
                                     } else { Value::Unit };
-                                    let current = m.entry(key).or_insert(default_val).clone();
+                                    m.entry(key.clone()).or_insert(default_val);
                                     env.borrow_mut().set(&map_var, Value::HashMap(m));
-                                    return Ok(current);
+                                    return Ok(Value::EntryRef { map_name: map_var, key });
                                 }
                             }
                         }
@@ -402,6 +408,11 @@ impl Interpreter {
                             .map(|c| Value::Char(c))
                             .ok_or_else(|| err(format!("string index {} out of bounds", i)))
                     }
+                    (Value::Tuple(v), Value::Int(i)) => {
+                        let idx = if i < 0 { v.len() as i64 + i } else { i } as usize;
+                        v.get(idx).cloned()
+                            .ok_or_else(|| err(format!("tuple index {} out of bounds", i)))
+                    }
                     (b, i) => Err(err(format!("cannot index {} with {}", b.type_name(), i.type_name()))),
                 }
             }
@@ -452,14 +463,35 @@ impl Interpreter {
             }
 
             Expr::Closure { params, body } => {
+                use crate::ast::ClosureParam;
+                let mut fn_params: Vec<Param> = Vec::new();
+                let mut pre_stmts: Vec<Stmt> = Vec::new();
+                for (i, cp) in params.iter().enumerate() {
+                    match cp {
+                        ClosureParam::Simple(name) => fn_params.push(Param {
+                            name: name.clone(), ty: Ty::Unit, is_self: false, mutable: false,
+                        }),
+                        ClosureParam::Tuple(names) => {
+                            let synth = format!("__p{}__", i);
+                            fn_params.push(Param { name: synth.clone(), ty: Ty::Unit, is_self: false, mutable: false });
+                            // Generate: let (a, b, ..) = __pN__;
+                            for (j, n) in names.iter().enumerate() {
+                                pre_stmts.push(Stmt::Let {
+                                    name: n.clone(), mutable: true, ty: None,
+                                    init: Some(Expr::Index(
+                                        Box::new(Expr::Ident(synth.clone())),
+                                        Box::new(Expr::Lit(Lit::Int(j as i64))),
+                                    )),
+                                });
+                            }
+                        }
+                    }
+                }
+                let mut body_stmts = pre_stmts;
+                body_stmts.push(Stmt::Expr(*body.clone()));
                 let cfn = CrustFn {
-                    params: params.iter().map(|p| Param {
-                        name: p.clone(),
-                        ty: Ty::Unit,
-                        is_self: false,
-                        mutable: false,
-                    }).collect(),
-                    body: Block { stmts: vec![Stmt::Expr(*body.clone())], tail: None },
+                    params: fn_params,
+                    body: Block { stmts: body_stmts, tail: None },
                     captured: Some(Rc::clone(&env)),
                 };
                 Ok(Value::Fn(cfn))
@@ -523,8 +555,17 @@ impl Interpreter {
             }
 
             Expr::Deref(inner) => {
-                // At Level 0, dereference is identity
-                self.eval_expr(inner, env)
+                let v = self.eval_expr(inner, Rc::clone(&env))?;
+                if let Value::EntryRef { map_name, key } = v {
+                    let map_val = env.borrow().get(&map_name)
+                        .ok_or_else(|| err(format!("no map `{}`", map_name)))?;
+                    if let Value::HashMap(m) = map_val {
+                        return Ok(m.get(&key).cloned().unwrap_or(Value::Unit));
+                    }
+                    return Err(err(format!("`{}` is not a HashMap", map_name)));
+                } else {
+                    Ok(v)
+                }
             }
         }
     }
@@ -758,8 +799,14 @@ impl Interpreter {
                         let matches_name = name == variant || name.ends_with(&format!("::{}", variant));
                         if !matches_name { return false; }
                         match (fields.as_slice(), inner) {
-                            ([single], Some(v)) => self.match_pat(single, v, env),
                             ([], None) => true,
+                            ([single], Some(v)) => self.match_pat(single, v, env),
+                            (multi, Some(v)) if multi.len() > 1 => {
+                                if let Value::Tuple(vals) = v.as_ref() {
+                                    multi.len() == vals.len() &&
+                                        multi.iter().zip(vals.iter()).all(|(p, fv)| self.match_pat(p, fv, env))
+                                } else { false }
+                            }
                             _ => false,
                         }
                     }
@@ -827,7 +874,22 @@ impl Interpreter {
                     _ => Err(err("invalid index assignment")),
                 }
             }
-            Expr::Deref(inner) => self.assign(inner, val, env),
+            Expr::Deref(inner) => {
+                // If deref target is an EntryRef, write through to the map
+                if let Expr::Ident(name) = inner.as_ref() {
+                    let current = env.borrow().get(name);
+                    if let Some(Value::EntryRef { map_name, key }) = current {
+                        let mut map_val = env.borrow().get(&map_name)
+                            .ok_or_else(|| err(format!("no map `{}`", map_name)))?;
+                        if let Value::HashMap(ref mut m) = map_val {
+                            m.insert(key, val);
+                        }
+                        env.borrow_mut().set(&map_name, map_val);
+                        return Ok(());
+                    }
+                }
+                self.assign(inner, val, env)
+            }
             Expr::Ref { expr, .. } => self.assign(expr, val, env),
             _ => Err(err("invalid assignment target")),
         }

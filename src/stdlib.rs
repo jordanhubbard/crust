@@ -939,6 +939,15 @@ pub fn call_method(
         (Value::HashMap(_), "remove") => {
             Some(Ok(Value::Option_(None))) // simplified
         }
+        (Value::HashMap(_), "iter" | "into_iter") => {
+            if let Value::HashMap(m) = recv {
+                let mut pairs: Vec<Value> = m.into_iter()
+                    .map(|(k, v)| Value::Tuple(vec![Value::Str(k), v]))
+                    .collect();
+                pairs.sort_by_key(|p| if let Value::Tuple(t) = p { t[0].to_string() } else { String::new() });
+                Some(Ok(Value::Vec(pairs)))
+            } else { None }
+        }
         (Value::HashMap(_), "clone") => Some(Ok(recv)),
 
         // ── Range ─────────────────────────────────────────────────────────────
@@ -1147,9 +1156,21 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                     } else if let Some(width) = fmt_spec.strip_prefix('^') {
                         let w: usize = width.parse().unwrap_or(0);
                         result.push_str(&format!("{:^width$}", val, width = w));
+                    } else if fmt_spec.starts_with('.') {
+                        // precision: {:.2} or {:.3}
+                        let prec: usize = fmt_spec[1..].parse().unwrap_or(6);
+                        match val {
+                            Value::Float(f) => result.push_str(&format!("{:.prec$}", f, prec = prec)),
+                            Value::Int(n) => result.push_str(&format!("{:.prec$}", *n as f64, prec = prec)),
+                            other => result.push_str(&other.to_string()),
+                        }
                     } else if fmt_spec.starts_with('0') {
-                        // zero-padded
-                        result.push_str(&val.to_string());
+                        // zero-padded: {:05}
+                        if let Ok(w) = fmt_spec[1..].parse::<usize>() {
+                            result.push_str(&format!("{:0>width$}", val, width = w));
+                        } else {
+                            result.push_str(&val.to_string());
+                        }
                     } else if fmt_spec == "b" {
                         if let Value::Int(n) = val { result.push_str(&format!("{:b}", n)); }
                         else { result.push_str(&val.to_string()); }
