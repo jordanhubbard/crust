@@ -1050,6 +1050,38 @@ pub fn call_method(
         (Value::Result_(_), "is_ok") => {
             Some(Ok(Value::Bool(matches!(recv, Value::Result_(Ok(_))))))
         }
+        (Value::Result_(_), "map") => {
+            match recv {
+                Value::Result_(Ok(v)) => {
+                    let func = args.into_iter().next().unwrap_or(Value::Unit);
+                    let result = match &func {
+                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![*v], None) {
+                            Ok(v) => v,
+                            Err(e) => return Some(Err(e)),
+                        },
+                        _ => *v,
+                    };
+                    Some(Ok(Value::Result_(Ok(Box::new(result)))))
+                }
+                Value::Result_(Err(e)) => Some(Ok(Value::Result_(Err(e)))),
+                other => Some(Ok(other)),
+            }
+        }
+        (Value::Result_(_), "and_then") => {
+            match recv {
+                Value::Result_(Ok(v)) => {
+                    let func = args.into_iter().next().unwrap_or(Value::Unit);
+                    if let Value::Fn(cfn) = func {
+                        match interp.call_crust_fn(&cfn, vec![*v], None) {
+                            Ok(v) => Some(Ok(v)),
+                            Err(e) => Some(Err(e)),
+                        }
+                    } else { Some(Ok(Value::Result_(Ok(v)))) }
+                }
+                Value::Result_(Err(e)) => Some(Ok(Value::Result_(Err(e)))),
+                other => Some(Ok(other)),
+            }
+        }
         (Value::Result_(_), "is_err") => {
             Some(Ok(Value::Bool(matches!(recv, Value::Result_(Err(_))))))
         }

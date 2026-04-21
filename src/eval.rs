@@ -567,6 +567,17 @@ impl Interpreter {
                     Ok(v)
                 }
             }
+
+            Expr::Try(inner) => {
+                let v = self.eval_expr(inner, env)?;
+                match v {
+                    Value::Result_(Ok(inner)) => Ok(*inner),
+                    Value::Result_(Err(e)) => Err(Signal::Return(Value::Result_(Err(e)))),
+                    Value::Option_(Some(inner)) => Ok(*inner),
+                    Value::Option_(None) => Err(Signal::Return(Value::Option_(None))),
+                    other => Ok(other),
+                }
+            }
         }
     }
 
@@ -1024,10 +1035,18 @@ pub fn eval_binary(op: &BinOp, l: Value, r: Value) -> EvalResult {
         (BinOp::Le, Float(a), Float(b)) => Ok(Bool(a <= b)),
         (BinOp::Gt, Float(a), Float(b)) => Ok(Bool(a > b)),
         (BinOp::Ge, Float(a), Float(b)) => Ok(Bool(a >= b)),
+        (BinOp::Eq, Int(a),   Float(b)) => Ok(Bool((*a as f64) == *b)),
+        (BinOp::Ne, Int(a),   Float(b)) => Ok(Bool((*a as f64) != *b)),
+        (BinOp::Eq, Float(a), Int(b))   => Ok(Bool(*a == (*b as f64))),
+        (BinOp::Ne, Float(a), Int(b))   => Ok(Bool(*a != (*b as f64))),
         (BinOp::Lt, Int(a),   Float(b)) => Ok(Bool((*a as f64) < *b)),
         (BinOp::Le, Int(a),   Float(b)) => Ok(Bool((*a as f64) <= *b)),
         (BinOp::Gt, Int(a),   Float(b)) => Ok(Bool((*a as f64) > *b)),
         (BinOp::Ge, Int(a),   Float(b)) => Ok(Bool((*a as f64) >= *b)),
+        (BinOp::Lt, Float(a), Int(b))   => Ok(Bool(*a < (*b as f64))),
+        (BinOp::Le, Float(a), Int(b))   => Ok(Bool(*a <= (*b as f64))),
+        (BinOp::Gt, Float(a), Int(b))   => Ok(Bool(*a > (*b as f64))),
+        (BinOp::Ge, Float(a), Int(b))   => Ok(Bool(*a >= (*b as f64))),
 
         // Comparisons — strings, bools, chars
         (BinOp::Eq, Str(a),  Str(b))  => Ok(Bool(a == b)),
@@ -1057,6 +1076,8 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Int(x),   Value::Int(y))   => x == y,
         (Value::Float(x), Value::Float(y)) => x == y,
+        (Value::Int(x),   Value::Float(y)) => (*x as f64) == *y,
+        (Value::Float(x), Value::Int(y))   => *x == (*y as f64),
         (Value::Bool(x),  Value::Bool(y))  => x == y,
         (Value::Str(x),   Value::Str(y))   => x == y,
         (Value::Char(x),  Value::Char(y))  => x == y,

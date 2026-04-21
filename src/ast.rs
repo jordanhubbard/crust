@@ -49,6 +49,7 @@ pub enum Expr {
     Path(Vec<String>),
     Ref { mutable: bool, expr: Box<Expr> },
     Deref(Box<Expr>),
+    Try(Box<Expr>),
 }
 
 #[derive(Debug, Clone)]

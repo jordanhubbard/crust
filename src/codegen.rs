@@ -336,6 +336,7 @@ impl Codegen {
             }
 
             Expr::Deref(inner) => format!("*{}", self.emit_expr(inner)),
+            Expr::Try(inner) => format!("{}?", self.emit_expr(inner)),
         }
     }
 

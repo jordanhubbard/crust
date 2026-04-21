@@ -663,8 +663,7 @@ impl Parser {
                 }
                 TokenKind::Question => {
                     self.advance();
-                    // `?` operator — wrap in method call "unwrap" for Level 0
-                    expr = Expr::MethodCall { receiver: Box::new(expr), method: "unwrap".into(), turbofish: None, args: vec![] };
+                    expr = Expr::Try(Box::new(expr));
                 }
                 _ => break,
             }
