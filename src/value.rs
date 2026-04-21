@@ -135,6 +135,14 @@ impl Value {
         match self {
             Value::Str(s) => format!("{:?}", s),
             Value::Char(c) => format!("{:?}", c),
+            Value::Vec(v) => {
+                let items: Vec<String> = v.iter().map(|x| x.debug_repr()).collect();
+                format!("[{}]", items.join(", "))
+            }
+            Value::Tuple(v) => {
+                let items: Vec<String> = v.iter().map(|x| x.debug_repr()).collect();
+                format!("({})", items.join(", "))
+            }
             other => other.to_string(),
         }
     }

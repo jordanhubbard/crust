@@ -267,7 +267,7 @@ pub fn call_method(
                 Some(Ok(Value::Bool(found)))
             } else { None }
         }
-        (Value::Vec(_), "first") => {
+        (Value::Vec(_), "first" | "next") => {
             if let Value::Vec(v) = recv {
                 Some(Ok(Value::Option_(v.into_iter().next().map(Box::new))))
             } else { None }
@@ -371,7 +371,16 @@ pub fn call_method(
                 Some(Ok(Value::Vec(pairs)))
             } else { None }
         }
-        (Value::Vec(_), "collect") => Some(Ok(recv)),
+        (Value::Vec(_), "collect") => {
+            if let Value::Vec(ref v) = recv {
+                // If all elements are chars, collect into String
+                if !v.is_empty() && v.iter().all(|x| matches!(x, Value::Char(_))) {
+                    let s: String = v.iter().map(|x| match x { Value::Char(c) => *c, _ => '?' }).collect();
+                    return Some(Ok(Value::Str(s)));
+                }
+            }
+            Some(Ok(recv))
+        }
         (Value::Vec(_), "count") => {
             if let Value::Vec(v) = recv { Some(Ok(Value::Int(v.len() as i64))) } else { None }
         }
@@ -799,6 +808,51 @@ pub fn call_method(
             if let Value::Int(n) = recv { Some(Ok(Value::Int(n.trailing_zeros() as i64))) } else { None }
         }
 
+        // ── Char methods ──────────────────────────────────────────────────────
+        (Value::Char(_), "to_uppercase") => {
+            if let Value::Char(c) = recv {
+                // Returns an iterator in real Rust; here return a Vec<char> that works as iterator
+                let uppers: Vec<Value> = c.to_uppercase().map(Value::Char).collect();
+                Some(Ok(Value::Vec(uppers)))
+            } else { None }
+        }
+        (Value::Char(_), "to_lowercase") => {
+            if let Value::Char(c) = recv {
+                let lowers: Vec<Value> = c.to_lowercase().map(Value::Char).collect();
+                Some(Ok(Value::Vec(lowers)))
+            } else { None }
+        }
+        (Value::Char(_), "is_alphabetic") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_alphabetic()))) } else { None }
+        }
+        (Value::Char(_), "is_alphanumeric") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_alphanumeric()))) } else { None }
+        }
+        (Value::Char(_), "is_numeric" | "is_ascii_digit") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_ascii_digit()))) } else { None }
+        }
+        (Value::Char(_), "is_whitespace") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_whitespace()))) } else { None }
+        }
+        (Value::Char(_), "is_uppercase") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_uppercase()))) } else { None }
+        }
+        (Value::Char(_), "is_lowercase") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_lowercase()))) } else { None }
+        }
+        (Value::Char(_), "to_string") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Str(c.to_string()))) } else { None }
+        }
+        (Value::Char(_), "to_digit") => {
+            if let Value::Char(c) = recv {
+                let base = match args.into_iter().next() { Some(Value::Int(b)) => b as u32, _ => 10 };
+                Some(Ok(Value::Option_(c.to_digit(base).map(|d| Box::new(Value::Int(d as i64))))))
+            } else { None }
+        }
+        (Value::Char(_), "len_utf8") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Int(c.len_utf8() as i64))) } else { None }
+        }
+
         // ── Option methods ────────────────────────────────────────────────────
         (Value::Option_(_), "unwrap") => {
             match recv {
@@ -1147,15 +1201,28 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                     let fmt_spec = spec.split(':').nth(1).unwrap_or("");
                     if fmt_spec == "?" || fmt_spec == "#?" {
                         result.push_str(&val.debug_repr());
-                    } else if let Some(width) = fmt_spec.strip_prefix('>') {
-                        let w: usize = width.parse().unwrap_or(0);
-                        result.push_str(&format!("{:>width$}", val, width = w));
-                    } else if let Some(width) = fmt_spec.strip_prefix('<') {
-                        let w: usize = width.parse().unwrap_or(0);
-                        result.push_str(&format!("{:<width$}", val, width = w));
-                    } else if let Some(width) = fmt_spec.strip_prefix('^') {
-                        let w: usize = width.parse().unwrap_or(0);
-                        result.push_str(&format!("{:^width$}", val, width = w));
+                    } else if let Some(align_pos) = fmt_spec.find(['>', '<', '^']) {
+                        // fill+align: e.g. ">10", "0>5", "<10", "^10"
+                        let fill = if align_pos > 0 { fmt_spec.chars().next().unwrap_or(' ') } else { ' ' };
+                        let align = fmt_spec.chars().nth(align_pos).unwrap_or('>');
+                        let w: usize = fmt_spec[align_pos+1..].parse().unwrap_or(0);
+                        let s = val.to_string();
+                        let len = s.chars().count();
+                        let pad = w.saturating_sub(len);
+                        let fill_str: String = std::iter::repeat(fill).take(pad).collect();
+                        let formatted = match align {
+                            '>' => format!("{}{}", fill_str, s),
+                            '<' => format!("{}{}", s, fill_str),
+                            '^' => {
+                                let left = pad / 2;
+                                let right = pad - left;
+                                let fl: String = std::iter::repeat(fill).take(left).collect();
+                                let fr: String = std::iter::repeat(fill).take(right).collect();
+                                format!("{}{}{}", fl, s, fr)
+                            }
+                            _ => s,
+                        };
+                        result.push_str(&formatted);
                     } else if fmt_spec.starts_with('.') {
                         // precision: {:.2} or {:.3}
                         let prec: usize = fmt_spec[1..].parse().unwrap_or(6);
@@ -1167,7 +1234,8 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                     } else if fmt_spec.starts_with('0') {
                         // zero-padded: {:05}
                         if let Ok(w) = fmt_spec[1..].parse::<usize>() {
-                            result.push_str(&format!("{:0>width$}", val, width = w));
+                            let s = val.to_string();
+                            result.push_str(&format!("{:0>width$}", s, width = w));
                         } else {
                             result.push_str(&val.to_string());
                         }
@@ -1186,7 +1254,8 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                         if let Value::Float(f) = val { result.push_str(&format!("{:e}", f)); }
                         else { result.push_str(&val.to_string()); }
                     } else if let Ok(width) = fmt_spec.parse::<usize>() {
-                        result.push_str(&format!("{:width$}", val, width = width));
+                        let s = val.to_string();
+                        result.push_str(&format!("{:width$}", s, width = width));
                     } else {
                         result.push_str(&val.to_string());
                     }
