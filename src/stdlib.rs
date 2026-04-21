@@ -133,10 +133,37 @@ pub fn call_method_mut(
             Some((Ok(Value::Unit), Value::HashMap(m)))
         }
         (Value::HashMap(mut m), "entry") => {
-            // entry().or_insert(v) — simplified: just return the value or insert
             let key = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
             let existing = m.entry(key).or_insert(Value::Unit).clone();
             Some((Ok(existing), Value::HashMap(m)))
+        }
+        // String mutating methods
+        (Value::Str(mut s), "push") => {
+            let c = match args.into_iter().next() {
+                Some(Value::Char(c)) => c,
+                Some(Value::Str(ref cs)) if cs.len() == 1 => cs.chars().next().unwrap(),
+                Some(Value::Int(n)) => char::from_u32(n as u32).unwrap_or('\0'),
+                _ => return None,
+            };
+            s.push(c);
+            Some((Ok(Value::Unit), Value::Str(s)))
+        }
+        (Value::Str(mut s), "push_str" | "push_str_ref") => {
+            let extra = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            s.push_str(&extra);
+            Some((Ok(Value::Unit), Value::Str(s)))
+        }
+        (Value::Str(mut s), "insert") => {
+            let mut it = args.into_iter();
+            if let (Some(Value::Int(idx)), Some(Value::Char(c))) = (it.next(), it.next()) {
+                let byte_idx = s.char_indices().nth(idx as usize).map(|(i, _)| i).unwrap_or(s.len());
+                s.insert(byte_idx, c);
+            }
+            Some((Ok(Value::Unit), Value::Str(s)))
+        }
+        (Value::Str(mut s), "clear") => {
+            s.clear();
+            Some((Ok(Value::Unit), Value::Str(s)))
         }
         _ => None,
     }
@@ -1009,6 +1036,7 @@ pub fn call_method(
         (Value::Range(..), "clone") => Some(Ok(recv)),
 
         // ── Universal ─────────────────────────────────────────────────────────
+        (_, "copied" | "cloned") => Some(Ok(recv)),  // identity in Level 0
         (_, "to_string" | "clone") => Some(Ok(recv)),
         (_, "type_name") => Some(Ok(Value::Str(recv.type_name().to_string()))),
         // Reference coercions — identity in Level 0

@@ -323,6 +323,27 @@ impl Interpreter {
                 let recv_ident = if let Expr::Ident(n) = receiver.as_ref() { Some(n.clone()) }
                     else { None };
 
+                // For mutating methods on struct fields (e.g. self.data.push(v)),
+                // apply mutation and write the updated field back into the struct
+                if recv_ident.is_none() {
+                    if let Expr::Field(struct_expr, field_name) = receiver.as_ref() {
+                        let struct_ident = match struct_expr.as_ref() { Expr::Ident(n) => Some(n.clone()), _ => None };
+                        if let Some(struct_var) = struct_ident {
+                            if let Some((ret_val, new_field)) = crate::stdlib::call_method_mut(
+                                recv_val.clone(), method, arg_vals.clone(), self
+                            ) {
+                                let ret_val = ret_val?;
+                                let struct_val = env.borrow().get(&struct_var);
+                                if let Some(Value::Struct { type_name: sty, mut fields }) = struct_val {
+                                    fields.insert(field_name.clone(), new_field);
+                                    env.borrow_mut().set(&struct_var, Value::Struct { type_name: sty, fields });
+                                }
+                                return Ok(ret_val);
+                            }
+                        }
+                    }
+                }
+
                 let recv_ident_clone = recv_ident.clone();
 
                 if let Some(ref var) = recv_ident {
@@ -479,14 +500,20 @@ impl Interpreter {
                 Ok(Value::Range(s, e, *inclusive))
             }
 
-            Expr::Cast(inner, _ty) => {
-                // Level 0: type casts are no-ops (we're dynamically typed)
+            Expr::Cast(inner, ty) => {
                 let v = self.eval_expr(inner, env)?;
-                // Basic numeric coercions
-                Ok(match v {
-                    Value::Int(n) => Value::Int(n),
-                    Value::Float(f) => Value::Float(f),
-                    other => other,
+                let ty_name = match ty {
+                    Ty::Named(s) => s.as_str(),
+                    _ => "",
+                };
+                Ok(match (v, ty_name) {
+                    (Value::Char(c), "i64"|"i32"|"u64"|"u32"|"u8"|"usize"|"isize") => Value::Int(c as i64),
+                    (Value::Int(n), "char") => Value::Char(char::from_u32(n as u32).unwrap_or('\0')),
+                    (Value::Int(n), "u8") => Value::Int(n & 0xFF),
+                    (Value::Int(n), "f64"|"f32") => Value::Float(n as f64),
+                    (Value::Float(f), "i64"|"i32"|"usize"|"isize") => Value::Int(f as i64),
+                    (Value::Bool(b), "i64"|"i32") => Value::Int(b as i64),
+                    (other, _) => other,
                 })
             }
 
@@ -951,6 +978,10 @@ pub fn eval_binary(op: &BinOp, l: Value, r: Value) -> EvalResult {
         (BinOp::Ne, Bool(a), Bool(b)) => Ok(Bool(a != b)),
         (BinOp::Eq, Char(a), Char(b)) => Ok(Bool(a == b)),
         (BinOp::Ne, Char(a), Char(b)) => Ok(Bool(a != b)),
+        (BinOp::Lt, Char(a), Char(b)) => Ok(Bool(a < b)),
+        (BinOp::Le, Char(a), Char(b)) => Ok(Bool(a <= b)),
+        (BinOp::Gt, Char(a), Char(b)) => Ok(Bool(a > b)),
+        (BinOp::Ge, Char(a), Char(b)) => Ok(Bool(a >= b)),
 
         // General equality fallback
         (BinOp::Eq, a, b) => Ok(Bool(values_equal(a, b))),
