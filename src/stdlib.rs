@@ -19,14 +19,23 @@ pub fn call_method_mut(
     interp: &mut Interpreter,
 ) -> Option<(R, Value)> {
     match (recv, method) {
-        // Vec mutating methods
-        (Value::Vec(mut v), "push") => {
+        // Vec mutating methods (push_back/pop_front are VecDeque aliases at Level 0)
+        (Value::Vec(mut v), "push" | "push_back") => {
             let val = args.into_iter().next().unwrap_or(Value::Unit);
             v.push(val);
             Some((Ok(Value::Unit), Value::Vec(v)))
         }
-        (Value::Vec(mut v), "pop") => {
+        (Value::Vec(mut v), "push_front") => {
+            let val = args.into_iter().next().unwrap_or(Value::Unit);
+            v.insert(0, val);
+            Some((Ok(Value::Unit), Value::Vec(v)))
+        }
+        (Value::Vec(mut v), "pop" | "pop_back") => {
             let result = v.pop();
+            Some((Ok(Value::Option_(result.map(Box::new))), Value::Vec(v)))
+        }
+        (Value::Vec(mut v), "pop_front") => {
+            let result = if v.is_empty() { None } else { Some(v.remove(0)) };
             Some((Ok(Value::Option_(result.map(Box::new))), Value::Vec(v)))
         }
         (Value::Vec(mut v), "insert") => {
@@ -232,9 +241,9 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
             Some(Ok(Value::Str(s)))
         }
 
-        // Vec constructors
-        "Vec::new" => Some(Ok(Value::Vec(Vec::new()))),
-        "Vec::with_capacity" => Some(Ok(Value::Vec(Vec::new()))),
+        // Vec / VecDeque constructors (VecDeque is just Vec at Level 0)
+        "Vec::new" | "VecDeque::new" => Some(Ok(Value::Vec(Vec::new()))),
+        "Vec::with_capacity" | "VecDeque::with_capacity" => Some(Ok(Value::Vec(Vec::new()))),
 
         // HashMap constructors
         "HashMap::new" => Some(Ok(Value::HashMap(HashMap::new()))),
@@ -261,6 +270,26 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
             println!("{}", s);
             interp.output.push(s);
             Some(Ok(Value::Unit))
+        }
+
+        // std::cmp free functions
+        "cmp::min" | "std::cmp::min" | "min" => {
+            let mut it = args.into_iter();
+            let a = it.next().unwrap_or(Value::Int(0));
+            let b = it.next().unwrap_or(Value::Int(0));
+            Some(Ok(match crate::eval::compare_values(&a, &b) {
+                Some(std::cmp::Ordering::Greater) => b,
+                _ => a,
+            }))
+        }
+        "cmp::max" | "std::cmp::max" | "max" => {
+            let mut it = args.into_iter();
+            let a = it.next().unwrap_or(Value::Int(0));
+            let b = it.next().unwrap_or(Value::Int(0));
+            Some(Ok(match crate::eval::compare_values(&a, &b) {
+                Some(std::cmp::Ordering::Less) => b,
+                _ => a,
+            }))
         }
 
         // Misc
@@ -611,10 +640,90 @@ pub fn call_method(
                 Some(Ok(acc))
             } else { None }
         }
+        (Value::Vec(_), "rev" | "into_iter_rev") => {
+            if let Value::Vec(mut v) = recv { v.reverse(); Some(Ok(Value::Vec(v))) } else { None }
+        }
+        (Value::Vec(_), "peekable") => Some(Ok(recv)),
+        (Value::Vec(_), "cloned" | "copied") => Some(Ok(recv)),
+        (Value::Vec(_), "by_ref") => Some(Ok(recv)),
+        (Value::Vec(_), "cycle") => Some(Ok(recv)), // simplified: returns self (not infinite)
         (Value::Vec(_), "step_by") => {
             if let Value::Vec(v) = recv {
                 let n = match args.into_iter().next() { Some(Value::Int(n)) => n.max(1) as usize, _ => 1 };
                 Some(Ok(Value::Vec(v.into_iter().step_by(n).collect())))
+            } else { None }
+        }
+        (Value::Vec(_), "min_by_key") => {
+            if let Value::Vec(v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                let mut best: Option<(Value, Value)> = None; // (key, item)
+                if let Value::Fn(cfn) = &func {
+                    for item in v {
+                        let k = match interp.call_crust_fn(cfn, vec![item.clone()], None) {
+                            Ok(v) => v,
+                            Err(e) => return Some(Err(e)),
+                        };
+                        let replace = match &best {
+                            None => true,
+                            Some((bk, _)) => crate::eval::compare_values(&k, bk) == Some(std::cmp::Ordering::Less),
+                        };
+                        if replace { best = Some((k, item)); }
+                    }
+                }
+                Some(Ok(Value::Option_(best.map(|(_, v)| Box::new(v)))))
+            } else { None }
+        }
+        (Value::Vec(_), "max_by_key") => {
+            if let Value::Vec(v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                let mut best: Option<(Value, Value)> = None;
+                if let Value::Fn(cfn) = &func {
+                    for item in v {
+                        let k = match interp.call_crust_fn(cfn, vec![item.clone()], None) {
+                            Ok(v) => v,
+                            Err(e) => return Some(Err(e)),
+                        };
+                        let replace = match &best {
+                            None => true,
+                            Some((bk, _)) => crate::eval::compare_values(&k, bk) == Some(std::cmp::Ordering::Greater),
+                        };
+                        if replace { best = Some((k, item)); }
+                    }
+                }
+                Some(Ok(Value::Option_(best.map(|(_, v)| Box::new(v)))))
+            } else { None }
+        }
+        (Value::Vec(_), "unzip") => {
+            if let Value::Vec(v) = recv {
+                let mut a = Vec::new();
+                let mut b = Vec::new();
+                for item in v {
+                    match item {
+                        Value::Tuple(pair) if pair.len() == 2 => {
+                            let mut it = pair.into_iter();
+                            a.push(it.next().unwrap());
+                            b.push(it.next().unwrap());
+                        }
+                        other => a.push(other),
+                    }
+                }
+                Some(Ok(Value::Tuple(vec![Value::Vec(a), Value::Vec(b)])))
+            } else { None }
+        }
+        (Value::Vec(_), "partition") => {
+            if let Value::Vec(v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                let mut yes = Vec::new();
+                let mut no = Vec::new();
+                if let Value::Fn(cfn) = &func {
+                    for item in v {
+                        match interp.call_crust_fn(cfn, vec![item.clone()], None) {
+                            Ok(v) if v.is_truthy() => yes.push(item),
+                            _ => no.push(item),
+                        }
+                    }
+                }
+                Some(Ok(Value::Tuple(vec![Value::Vec(yes), Value::Vec(no)])))
             } else { None }
         }
         (Value::Vec(_), "flatten") => {
@@ -1533,25 +1642,50 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                             Value::Int(n) => result.push_str(&format!("{:.prec$}", *n as f64, prec = prec)),
                             other => result.push_str(&other.to_string()),
                         }
+                    } else if fmt_spec == "+" {
+                        match val {
+                            Value::Int(n) => result.push_str(&format!("{:+}", n)),
+                            Value::Float(f) => result.push_str(&format!("{:+}", f)),
+                            other => result.push_str(&other.to_string()),
+                        }
+                    } else if fmt_spec.ends_with('b') || fmt_spec.ends_with('x') || fmt_spec.ends_with('X') || fmt_spec.ends_with('o') {
+                        // Possibly zero-padded: {:08b}, {:04x}, {:o}
+                        let suffix = fmt_spec.chars().last().unwrap();
+                        let rest = &fmt_spec[..fmt_spec.len()-1];
+                        let (zero_pad, width) = if rest.starts_with('0') {
+                            (true, rest[1..].parse::<usize>().unwrap_or(0))
+                        } else {
+                            (false, rest.parse::<usize>().unwrap_or(0))
+                        };
+                        if let Value::Int(n) = val {
+                            let base_str = match suffix {
+                                'b' => format!("{:b}", n),
+                                'x' => format!("{:x}", n),
+                                'X' => format!("{:X}", n),
+                                'o' => format!("{:o}", n),
+                                _ => n.to_string(),
+                            };
+                            if width > 0 {
+                                if zero_pad {
+                                    result.push_str(&format!("{:0>width$}", base_str, width = width));
+                                } else {
+                                    result.push_str(&format!("{:width$}", base_str, width = width));
+                                }
+                            } else {
+                                result.push_str(&base_str);
+                            }
+                        } else { result.push_str(&val.to_string()); }
                     } else if fmt_spec.starts_with('0') {
-                        // zero-padded: {:05}
-                        if let Ok(w) = fmt_spec[1..].parse::<usize>() {
-                            let s = val.to_string();
-                            result.push_str(&format!("{:0>width$}", s, width = w));
+                        // zero-padded decimal: {:05}
+                        let rest = &fmt_spec[1..];
+                        if let Ok(w) = rest.parse::<usize>() {
+                            match val {
+                                Value::Int(n) => result.push_str(&format!("{:0>width$}", n, width = w)),
+                                other => result.push_str(&format!("{:0>width$}", other.to_string(), width = w)),
+                            }
                         } else {
                             result.push_str(&val.to_string());
                         }
-                    } else if fmt_spec == "b" {
-                        if let Value::Int(n) = val { result.push_str(&format!("{:b}", n)); }
-                        else { result.push_str(&val.to_string()); }
-                    } else if fmt_spec == "x" || fmt_spec == "X" {
-                        if let Value::Int(n) = val {
-                            if fmt_spec == "x" { result.push_str(&format!("{:x}", n)); }
-                            else { result.push_str(&format!("{:X}", n)); }
-                        } else { result.push_str(&val.to_string()); }
-                    } else if fmt_spec == "o" {
-                        if let Value::Int(n) = val { result.push_str(&format!("{:o}", n)); }
-                        else { result.push_str(&val.to_string()); }
                     } else if fmt_spec == "e" || fmt_spec == "E" {
                         if let Value::Float(f) = val { result.push_str(&format!("{:e}", f)); }
                         else { result.push_str(&val.to_string()); }

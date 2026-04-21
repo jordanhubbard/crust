@@ -26,6 +26,39 @@ fn err(msg: impl Into<String>) -> Signal {
     Signal::Err(CrustError::runtime(msg))
 }
 
+// ── EntryRef helpers ──────────────────────────────────────────────────────────
+// map_name is either a plain env var name, or "__sf__::struct_var::field_name"
+// for HashMap values stored inside struct fields.
+
+fn lookup_entry_map(map_name: &str, env: &Rc<RefCell<Env>>) -> Option<Value> {
+    if let Some(path) = map_name.strip_prefix("__sf__::") {
+        let mut parts = path.splitn(2, "::");
+        let sv = parts.next()?;
+        let fn_ = parts.next()?;
+        match env.borrow().get(sv)? {
+            Value::Struct { fields, .. } => fields.get(fn_).cloned(),
+            _ => None,
+        }
+    } else {
+        env.borrow().get(map_name)
+    }
+}
+
+fn write_back_entry_map(map_name: &str, new_val: Value, env: &Rc<RefCell<Env>>) {
+    if let Some(path) = map_name.strip_prefix("__sf__::") {
+        let mut parts = path.splitn(2, "::");
+        if let (Some(sv), Some(fn_)) = (parts.next(), parts.next()) {
+            let struct_opt = env.borrow().get(sv); // Ref dropped before if-let body
+            if let Some(Value::Struct { type_name, mut fields }) = struct_opt {
+                fields.insert(fn_.to_string(), new_val);
+                env.borrow_mut().set(sv, Value::Struct { type_name, fields });
+            }
+        }
+    } else {
+        env.borrow_mut().set(map_name, new_val);
+    }
+}
+
 // ── Interpreter ───────────────────────────────────────────────────────────────
 
 pub struct Interpreter {
@@ -206,7 +239,7 @@ impl Interpreter {
                     if let Value::EntryRef { ref map_name, ref key } = v {
                         let map_name = map_name.clone();
                         let key = key.clone();
-                        let map_val = env.borrow().get(&map_name)
+                        let map_val = lookup_entry_map(&map_name, &env)
                             .ok_or_else(|| err(format!("no map `{}`", map_name)))?;
                         if let Value::HashMap(m) = map_val {
                             return Ok(m.get(&key).cloned().unwrap_or(Value::Unit));
@@ -331,10 +364,20 @@ impl Interpreter {
                 } else { method.clone() };
                 let method: &str = &method_str;
                 // Special-case: map.entry(k).or_insert(v) / or_insert_with(f)
+                // map can be a plain ident or a struct field (self.field)
                 if matches!(method, "or_insert" | "or_insert_with" | "or_default") {
                     if let Expr::MethodCall { receiver: map_expr, method: entry_m, args: entry_args, .. } = receiver.as_ref() {
                         if entry_m == "entry" {
-                            if let Some(map_var) = match map_expr.as_ref() { Expr::Ident(n) => Some(n.clone()), _ => None } {
+                            let map_key_opt: Option<String> = match map_expr.as_ref() {
+                                Expr::Ident(n) => Some(n.clone()),
+                                Expr::Field(se, fn_) => {
+                                    if let Expr::Ident(sv) = se.as_ref() {
+                                        Some(format!("__sf__::{}::{}", sv, fn_))
+                                    } else { None }
+                                }
+                                _ => None,
+                            };
+                            if let Some(map_key) = map_key_opt {
                                 let map_val = self.eval_expr(map_expr, Rc::clone(&env))?;
                                 if let Value::HashMap(mut m) = map_val {
                                     let key = entry_args.iter().map(|a| self.eval_expr(a, Rc::clone(&env))).next()
@@ -348,8 +391,8 @@ impl Interpreter {
                                         } else { v }
                                     } else { Value::Unit };
                                     m.entry(key.clone()).or_insert(default_val);
-                                    env.borrow_mut().set(&map_var, Value::HashMap(m));
-                                    return Ok(Value::EntryRef { map_name: map_var, key });
+                                    write_back_entry_map(&map_key, Value::HashMap(m), &env);
+                                    return Ok(Value::EntryRef { map_name: map_key, key });
                                 }
                             }
                         }
@@ -359,6 +402,24 @@ impl Interpreter {
                 let arg_vals: Vec<Value> = args.iter()
                     .map(|a| self.eval_expr(a, Rc::clone(&env)))
                     .collect::<Result<_, _>>()?;
+
+                // Dispatch mutating methods on an EntryRef (e.g. map.entry(k).or_insert_with(Vec::new).push(v))
+                if let Value::EntryRef { ref map_name, ref key } = recv_val {
+                    let map_name = map_name.clone();
+                    let key = key.clone();
+                    let map_val = lookup_entry_map(&map_name, &env)
+                        .ok_or_else(|| err(format!("no map for entry ref `{}`", map_name)))?;
+                    if let Value::HashMap(mut m) = map_val {
+                        let entry_val = m.get(&key).cloned().unwrap_or(Value::Unit);
+                        if let Some((ret_val, new_entry)) = crate::stdlib::call_method_mut(entry_val, method, arg_vals.clone(), self) {
+                            let ret_val = ret_val?;
+                            m.insert(key, new_entry);
+                            write_back_entry_map(&map_name, Value::HashMap(m), &env);
+                            return Ok(ret_val);
+                        }
+                    }
+                }
+
                 let type_name = match &recv_val {
                     Value::Struct { type_name, .. } => type_name.clone(),
                     Value::Enum { type_name, .. } => type_name.clone(),
@@ -596,7 +657,7 @@ impl Interpreter {
             Expr::Deref(inner) => {
                 let v = self.eval_expr(inner, Rc::clone(&env))?;
                 if let Value::EntryRef { map_name, key } = v {
-                    let map_val = env.borrow().get(&map_name)
+                    let map_val = lookup_entry_map(&map_name, &env)
                         .ok_or_else(|| err(format!("no map `{}`", map_name)))?;
                     if let Value::HashMap(m) = map_val {
                         return Ok(m.get(&key).cloned().unwrap_or(Value::Unit));
@@ -649,6 +710,18 @@ impl Interpreter {
                     .map(|a| self.eval_expr(a, Rc::clone(&env)))
                     .collect::<Result<_, _>>()?;
                 Ok(Value::Vec(vals))
+            }
+
+            s if s.starts_with("__vec_repeat__") => {
+                // vec![val; N] repeat: args[0] = value, args[1] = count
+                if args.len() == 2 {
+                    let val = self.eval_expr(&args[0], Rc::clone(&env))?;
+                    let n = match self.eval_expr(&args[1], Rc::clone(&env))? {
+                        Value::Int(n) => n as usize,
+                        _ => 0,
+                    };
+                    Ok(Value::Vec(vec![val; n]))
+                } else { Ok(Value::Vec(vec![])) }
             }
 
             "assert" => {
@@ -929,12 +1002,12 @@ impl Interpreter {
                 if let Expr::Ident(name) = inner.as_ref() {
                     let current = env.borrow().get(name);
                     if let Some(Value::EntryRef { map_name, key }) = current {
-                        let mut map_val = env.borrow().get(&map_name)
+                        let mut map_val = lookup_entry_map(&map_name, &env)
                             .ok_or_else(|| err(format!("no map `{}`", map_name)))?;
                         if let Value::HashMap(ref mut m) = map_val {
                             m.insert(key, val);
                         }
-                        env.borrow_mut().set(&map_name, map_val);
+                        write_back_entry_map(&map_name, map_val, &env);
                         return Ok(());
                     }
                 }
