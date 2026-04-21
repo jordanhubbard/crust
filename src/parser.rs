@@ -656,6 +656,12 @@ impl Parser {
                     expr = Expr::Index(Box::new(expr), Box::new(idx));
                 }
                 TokenKind::LParen => {
+                    // Don't treat block-like exprs followed by `(` as function calls.
+                    // e.g. `while {...} (2..=n).filter(...)` must NOT parse as `while_result(2..=n)`.
+                    let is_block_like = matches!(&expr,
+                        Expr::Block(_) | Expr::If { .. } | Expr::Match { .. } | Expr::Macro { .. }
+                    );
+                    if is_block_like { break; }
                     self.advance();
                     let args = self.parse_args()?;
                     self.expect(&TokenKind::RParen)?;
