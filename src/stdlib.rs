@@ -53,6 +53,29 @@ pub fn call_method_mut(
             v.sort_by(|a, b| crate::eval::compare_values(a, b).unwrap_or(std::cmp::Ordering::Equal));
             Some((Ok(Value::Unit), Value::Vec(v)))
         }
+        (Value::Vec(mut v), "sort_by" | "sort_unstable_by") => {
+            let func = args.into_iter().next().unwrap_or(Value::Unit);
+            let mut err_signal: Option<Signal> = None;
+            v.sort_by(|a, b| {
+                if err_signal.is_some() { return std::cmp::Ordering::Equal; }
+                if let Value::Fn(cfn) = &func {
+                    match interp.call_crust_fn(cfn, vec![a.clone(), b.clone()], None) {
+                        Ok(Value::Int(-1) | Value::Int(i64::MIN..=-1)) =>
+                            std::cmp::Ordering::Less,
+                        Ok(Value::Int(0)) => std::cmp::Ordering::Equal,
+                        Ok(Value::Int(1..)) => std::cmp::Ordering::Greater,
+                        Ok(Value::Enum { variant, .. }) if variant == "Less" => std::cmp::Ordering::Less,
+                        Ok(Value::Enum { variant, .. }) if variant == "Equal" => std::cmp::Ordering::Equal,
+                        Ok(Value::Enum { variant, .. }) if variant == "Greater" => std::cmp::Ordering::Greater,
+                        Ok(other) => crate::eval::compare_values(&other, &Value::Int(0))
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                        Err(e) => { err_signal = Some(e); std::cmp::Ordering::Equal }
+                    }
+                } else { std::cmp::Ordering::Equal }
+            });
+            if let Some(e) = err_signal { return Some((Err(e), Value::Vec(v))); }
+            Some((Ok(Value::Unit), Value::Vec(v)))
+        }
         (Value::Vec(mut v), "sort_by_key") => {
             let func = args.into_iter().next().unwrap_or(Value::Unit);
             let mut err_signal: Option<Signal> = None;
@@ -94,6 +117,26 @@ pub fn call_method_mut(
                 v.truncate(n as usize);
             }
             Some((Ok(Value::Unit), Value::Vec(v)))
+        }
+        (Value::Vec(mut v), "split_off") => {
+            let at = match args.into_iter().next() {
+                Some(Value::Int(n)) => n as usize,
+                _ => v.len(),
+            };
+            let at = at.min(v.len());
+            let split = v.split_off(at);
+            Some((Ok(Value::Vec(split)), Value::Vec(v)))
+        }
+        (Value::Vec(mut v), "append") => {
+            if let Some(Value::Vec(mut other)) = args.into_iter().next() {
+                v.append(&mut other);
+            }
+            Some((Ok(Value::Unit), Value::Vec(v)))
+        }
+        (Value::Vec(mut v), "drain") => {
+            // drain(range) — collect drained elements, keep remaining
+            let drained = v.drain(..).collect::<Vec<_>>();
+            Some((Ok(Value::Vec(drained)), Value::Vec(Vec::new())))
         }
         (Value::Vec(mut v), "retain") => {
             let func = args.into_iter().next().unwrap_or(Value::Unit);
@@ -195,6 +238,18 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
 
         // HashMap constructors
         "HashMap::new" => Some(Ok(Value::HashMap(HashMap::new()))),
+
+        // char constructors
+        "char::from" | "char::from_u32_unchecked" => {
+            let v = args.into_iter().next().unwrap_or(Value::Int(0));
+            let n = match v { Value::Int(n) => n as u32, Value::Char(c) => c as u32, _ => 0 };
+            Some(Ok(Value::Char(char::from_u32(n).unwrap_or('\0'))))
+        }
+        "char::from_u32" => {
+            let v = args.into_iter().next().unwrap_or(Value::Int(0));
+            let n = match v { Value::Int(n) => n as u32, _ => 0 };
+            Some(Ok(Value::Option_(char::from_u32(n).map(|c| Box::new(Value::Char(c))))))
+        }
 
         // Numeric
         "std::i64::MIN" | "i64::MIN" => Some(Ok(Value::Int(i64::MIN))),
@@ -302,6 +357,22 @@ pub fn call_method(
                     }
                 });
                 Some(Ok(Value::Vec(v)))
+            } else { None }
+        }
+        (Value::Vec(_), "binary_search") => {
+            if let Value::Vec(v) = recv {
+                let target = args.into_iter().next().unwrap_or(Value::Unit);
+                let result = v.iter().enumerate().find(|(_, x)| crate::eval::values_equal(x, &target))
+                    .map(|(i, _)| i);
+                match result {
+                    Some(i) => Some(Ok(Value::Result_(Ok(Box::new(Value::Int(i as i64)))))),
+                    None => {
+                        // return Err with insertion point
+                        let pos = v.iter().take_while(|x| crate::eval::compare_values(x, &target)
+                            .map_or(false, |o| o == std::cmp::Ordering::Less)).count();
+                        Some(Ok(Value::Result_(Err(Box::new(Value::Int(pos as i64))))))
+                    }
+                }
             } else { None }
         }
         (Value::Vec(_), "reverse") => {
@@ -673,6 +744,18 @@ pub fn call_method(
                 }
             } else { None }
         }
+        (Value::Str(_), "cmp" | "partial_cmp") => {
+            if let Value::Str(s) = recv {
+                let other = match args.into_iter().next() { Some(Value::Str(x)) => x, Some(v) => v.to_string(), _ => return None };
+                let ord = s.cmp(&other);
+                let v = match ord {
+                    std::cmp::Ordering::Less => Value::Int(-1),
+                    std::cmp::Ordering::Equal => Value::Int(0),
+                    std::cmp::Ordering::Greater => Value::Int(1),
+                };
+                Some(Ok(v))
+            } else { None }
+        }
         (Value::Str(_), "to_string" | "clone") => Some(Ok(recv)),
         (Value::Str(_), "push_str") => {
             // In Rust this mutates; at Level 0 we return a concatenated string
@@ -795,6 +878,36 @@ pub fn call_method(
                 let lo = match args.first() { Some(Value::Int(x)) => *x, _ => n };
                 let hi = match args.get(1) { Some(Value::Int(x)) => *x, _ => n };
                 Some(Ok(Value::Int(n.clamp(lo, hi))))
+            } else { None }
+        }
+        (Value::Int(_), "cmp" | "partial_cmp") => {
+            if let Value::Int(n) = recv {
+                let other = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                let ord = n.cmp(&other);
+                let v = match ord {
+                    std::cmp::Ordering::Less => Value::Int(-1),
+                    std::cmp::Ordering::Equal => Value::Int(0),
+                    std::cmp::Ordering::Greater => Value::Int(1),
+                };
+                Some(Ok(v))
+            } else { None }
+        }
+        (Value::Int(_), "rem_euclid") => {
+            if let Value::Int(n) = recv {
+                let rhs = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                Some(Ok(Value::Int(n.rem_euclid(rhs))))
+            } else { None }
+        }
+        (Value::Int(_), "checked_add") => {
+            if let Value::Int(n) = recv {
+                let rhs = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                Some(Ok(Value::Option_(n.checked_add(rhs).map(|v| Box::new(Value::Int(v))))))
+            } else { None }
+        }
+        (Value::Int(_), "wrapping_add") => {
+            if let Value::Int(n) = recv {
+                let rhs = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                Some(Ok(Value::Int(n.wrapping_add(rhs))))
             } else { None }
         }
         (Value::Int(_), "to_string" | "clone") => Some(Ok(recv)),
