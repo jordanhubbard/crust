@@ -184,6 +184,20 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
         // Misc
         "drop" => Some(Ok(Value::Unit)),
         "clone" => Some(Ok(args.into_iter().next().unwrap_or(Value::Unit))),
+        "String::new" => Some(Ok(Value::Str(String::new()))),
+        "String::from" | "String::from_str" => {
+            let s = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+            Some(Ok(Value::Str(s)))
+        }
+        "String::with_capacity" => Some(Ok(Value::Str(String::new()))),
+        "Vec::new" | "Vec::new()" => Some(Ok(Value::Vec(Vec::new()))),
+        "Vec::with_capacity" => Some(Ok(Value::Vec(Vec::new()))),
+        "println" | "print" | "eprintln" | "eprint" => {
+            let s = args.into_iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+            println!("{}", s);
+            interp.output.push(s);
+            Some(Ok(Value::Unit))
+        }
 
         _ => None,
     }
@@ -571,6 +585,12 @@ pub fn call_method(
                 let sep = args.into_iter().nth(1).map(|v| v.to_string()).unwrap_or_default();
                 let parts: Vec<Value> = s.splitn(n, &sep[..]).map(|p| Value::Str(p.to_string())).collect();
                 Some(Ok(Value::Vec(parts)))
+            } else { None }
+        }
+        (Value::Str(_), "split_whitespace" | "split_ascii_whitespace") => {
+            if let Value::Str(s) = recv {
+                let ws: Vec<Value> = s.split_whitespace().map(|w| Value::Str(w.to_string())).collect();
+                Some(Ok(Value::Vec(ws)))
             } else { None }
         }
         (Value::Str(_), "lines") => {
@@ -991,6 +1011,73 @@ pub fn call_method(
         // ── Universal ─────────────────────────────────────────────────────────
         (_, "to_string" | "clone") => Some(Ok(recv)),
         (_, "type_name") => Some(Ok(Value::Str(recv.type_name().to_string()))),
+        // Reference coercions — identity in Level 0
+        (_, "as_str" | "as_ref" | "as_mut" | "as_slice" | "borrow" | "borrow_mut"
+           | "deref" | "deref_mut" | "into" | "as_deref" | "as_deref_mut") => Some(Ok(recv)),
+        // Discard (used to suppress must-use)
+        (_, "ok" | "err" | "is_err" | "is_ok") if matches!(&recv, Value::Result_(_)) => {
+            match (method, &recv) {
+                ("is_ok",  Value::Result_(r)) => Some(Ok(Value::Bool(r.is_ok()))),
+                ("is_err", Value::Result_(r)) => Some(Ok(Value::Bool(r.is_err()))),
+                ("ok", Value::Result_(Ok(v))) => Some(Ok(Value::Option_(Some(v.clone())))),
+                ("ok", Value::Result_(_))     => Some(Ok(Value::Option_(None))),
+                ("err", Value::Result_(Err(e))) => Some(Ok(Value::Option_(Some(Box::new(Value::Str(e.to_string())))))),
+                ("err", Value::Result_(_))      => Some(Ok(Value::Option_(None))),
+                _ => None,
+            }
+        }
+        (_, "unwrap_or_else") => {
+            match recv {
+                Value::Option_(Some(v)) => Some(Ok(*v)),
+                Value::Option_(None) => {
+                    let func = args.into_iter().next().unwrap_or(Value::Unit);
+                    if let Value::Fn(cfn) = func {
+                        Some(interp.call_crust_fn(&cfn, vec![], None))
+                    } else { Some(Ok(Value::Unit)) }
+                }
+                Value::Result_(Ok(v)) => Some(Ok(*v)),
+                Value::Result_(Err(_)) => {
+                    let func = args.into_iter().next().unwrap_or(Value::Unit);
+                    if let Value::Fn(cfn) = func {
+                        Some(interp.call_crust_fn(&cfn, vec![], None))
+                    } else { Some(Ok(Value::Unit)) }
+                }
+                other => Some(Ok(other)),
+            }
+        }
+        (_, "ok_or" | "ok_or_else") => {
+            match recv {
+                Value::Option_(Some(v)) => Some(Ok(Value::Result_(Ok(v)))),
+                Value::Option_(None) => {
+                    let err_val = args.into_iter().next().unwrap_or(Value::Str("None".to_string()));
+                    Some(Ok(Value::Result_(Err(Box::new(err_val)))))
+                }
+                other => Some(Ok(other)),
+            }
+        }
+        (_, "map_err") => {
+            match recv {
+                Value::Result_(Ok(v)) => Some(Ok(Value::Result_(Ok(v)))),
+                Value::Result_(Err(e)) => {
+                    let func = args.into_iter().next().unwrap_or(Value::Unit);
+                    let new_e = if let Value::Fn(cfn) = func {
+                        match interp.call_crust_fn(&cfn, vec![*e], None) {
+                            Ok(v) => Box::new(v),
+                            Err(sig) => return Some(Err(sig)),
+                        }
+                    } else { e };
+                    Some(Ok(Value::Result_(Err(new_e))))
+                }
+                other => Some(Ok(other)),
+            }
+        }
+        (_, "unwrap_err") => {
+            match recv {
+                Value::Result_(Err(e)) => Some(Ok(*e)),
+                Value::Result_(Ok(v))  => Some(Err(err(format!("called unwrap_err on Ok({:?})", v)))),
+                other => Some(Ok(other)),
+            }
+        }
 
         _ => None,
     }

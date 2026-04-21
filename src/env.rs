@@ -33,7 +33,9 @@ impl Env {
             return;
         }
         if let Some(parent) = &self.parent {
-            if parent.borrow().has(name) {
+            // Extract the boolean before the borrow is dropped to avoid RefCell double-borrow panic.
+            let has = parent.borrow().has(name);
+            if has {
                 parent.borrow_mut().set(name, val);
                 return;
             }

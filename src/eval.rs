@@ -89,11 +89,12 @@ impl Interpreter {
     // ── Function calls ────────────────────────────────────────────────────────
 
     fn call_fn(&mut self, name: &str, args: Vec<Value>, env: Rc<RefCell<Env>>) -> EvalResult {
-        // Check local env first (closures/fn-params bound by name)
-        if let Some(val) = env.borrow().get(name) {
-            if let Value::Fn(cfn) = val {
-                return self.call_crust_fn(&cfn, args, None);
-            }
+        // Check local env first (closures/fn-params bound by name).
+        // Extract the value in a separate statement so the borrow is dropped before
+        // call_crust_fn runs (which may need to borrow_mut the same env via captures).
+        let local_fn = env.borrow().get(name);
+        if let Some(Value::Fn(cfn)) = local_fn {
+            return self.call_crust_fn(&cfn, args, None);
         }
 
         // Check top-level registered functions
@@ -284,6 +285,31 @@ impl Interpreter {
             }
 
             Expr::MethodCall { receiver, method, args, .. } => {
+                // Special-case: map.entry(k).or_insert(v) / or_insert_with(f)
+                if matches!(method.as_str(), "or_insert" | "or_insert_with" | "or_default") {
+                    if let Expr::MethodCall { receiver: map_expr, method: entry_m, args: entry_args, .. } = receiver.as_ref() {
+                        if entry_m == "entry" {
+                            if let Some(map_var) = match map_expr.as_ref() { Expr::Ident(n) => Some(n.clone()), _ => None } {
+                                let map_val = self.eval_expr(map_expr, Rc::clone(&env))?;
+                                if let Value::HashMap(mut m) = map_val {
+                                    let key = entry_args.iter().map(|a| self.eval_expr(a, Rc::clone(&env))).next()
+                                        .transpose()?.map(|v| v.to_string()).unwrap_or_default();
+                                    let default_val = if method == "or_default" {
+                                        Value::Int(0)
+                                    } else if let Some(arg) = args.first() {
+                                        let v = self.eval_expr(arg, Rc::clone(&env))?;
+                                        if let Value::Fn(cfn) = v {
+                                            self.call_crust_fn(&cfn, vec![], None)?
+                                        } else { v }
+                                    } else { Value::Unit };
+                                    let current = m.entry(key).or_insert(default_val).clone();
+                                    env.borrow_mut().set(&map_var, Value::HashMap(m));
+                                    return Ok(current);
+                                }
+                            }
+                        }
+                    }
+                }
                 let recv_val = self.eval_expr(receiver, Rc::clone(&env))?;
                 let arg_vals: Vec<Value> = args.iter()
                     .map(|a| self.eval_expr(a, Rc::clone(&env)))
