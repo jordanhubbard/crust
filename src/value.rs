@@ -135,6 +135,7 @@ impl Value {
         match self {
             Value::Str(s) => format!("{:?}", s),
             Value::Char(c) => format!("{:?}", c),
+            Value::Float(f) => format!("{:?}", f),  // shows 58.0 instead of 58
             Value::Vec(v) => {
                 let items: Vec<String> = v.iter().map(|x| x.debug_repr()).collect();
                 format!("[{}]", items.join(", "))
@@ -143,6 +144,10 @@ impl Value {
                 let items: Vec<String> = v.iter().map(|x| x.debug_repr()).collect();
                 format!("({})", items.join(", "))
             }
+            Value::Option_(Some(v)) => format!("Some({})", v.debug_repr()),
+            Value::Option_(None) => "None".to_string(),
+            Value::Result_(Ok(v)) => format!("Ok({})", v.debug_repr()),
+            Value::Result_(Err(e)) => format!("Err({})", e.debug_repr()),
             other => other.to_string(),
         }
     }
