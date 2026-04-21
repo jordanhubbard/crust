@@ -1,0 +1,13 @@
+fn greet(name: &str) {
+    println!("Hello, {}!", name);
+}
+
+fn main() {
+    let names = vec!["Alice", "Bob", "Charlie"];
+    let mut count = 0;
+    for name in names {
+        greet(name);
+        count += 1;
+    }
+    println!("Greeted {} people", count);
+}

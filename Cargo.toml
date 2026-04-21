@@ -9,3 +9,7 @@ authors = ["Natasha Fatale", "Rocky J. Squirrel", "t peps"]
 [[bin]]
 name = "crust"
 path = "src/main.rs"
+
+[dependencies]
+thiserror = "2"
+rustyline = "14"
