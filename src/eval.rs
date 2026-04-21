@@ -198,6 +198,16 @@ impl Interpreter {
 
             Expr::Ident(name) => {
                 if let Some(v) = env.borrow().get(name) {
+                    // Auto-deref EntryRef when used in value context
+                    if let Value::EntryRef { ref map_name, ref key } = v {
+                        let map_name = map_name.clone();
+                        let key = key.clone();
+                        let map_val = env.borrow().get(&map_name)
+                            .ok_or_else(|| err(format!("no map `{}`", map_name)))?;
+                        if let Value::HashMap(m) = map_val {
+                            return Ok(m.get(&key).cloned().unwrap_or(Value::Unit));
+                        }
+                    }
                     return Ok(v);
                 }
                 // Fall back to top-level function as a value
