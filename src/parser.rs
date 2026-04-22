@@ -602,6 +602,57 @@ impl Parser {
             TokenKind::Underscore => { self.advance(); "_".to_string() }
             other => return Err(CrustError::parse(format!("expected pattern in let, got {:?}", other), self.line())),
         };
+        // Struct pattern: let Point { x, y } = ... or let Ns::Type { ... } = ...
+        // Detect if this is a struct-pattern let by checking for `{` possibly after `::` path
+        let mut path = vec![name.clone()];
+        while self.check(&TokenKind::ColonColon) {
+            let saved_pos = self.pos;
+            self.advance(); // consume ::
+            match self.peek().clone() {
+                TokenKind::Ident(s) => { self.advance(); path.push(s); }
+                _ => { self.pos = saved_pos; break; }
+            }
+        }
+        if self.check(&TokenKind::LBrace) {
+            // struct destructuring pattern
+            let full_name = path.join("::");
+            let saved_pos = self.pos;
+            self.advance(); // consume {
+            let mut fields = Vec::new();
+            let mut rest = false;
+            let mut valid = true;
+            while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
+                if self.eat(&TokenKind::DotDot) { rest = true; break; }
+                let fname = match self.peek().clone() {
+                    TokenKind::Ident(s) => { self.advance(); s }
+                    _ => { valid = false; break; }
+                };
+                let fpat = if self.eat(&TokenKind::Colon) {
+                    self.parse_pat()?
+                } else {
+                    Pat::Ident(fname.clone())
+                };
+                fields.push((fname, fpat));
+                if !self.eat(&TokenKind::Comma) { break; }
+            }
+            if valid && self.eat(&TokenKind::RBrace) {
+                let pat = Pat::Struct { name: full_name, fields, rest };
+                let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_ty()?) } else { None };
+                let init = if self.eat(&TokenKind::Eq) { Some(self.parse_expr(0)?) } else { None };
+                self.eat(&TokenKind::Semi);
+                return Ok(Stmt::LetPat { pat, ty, init });
+            }
+            // Not a valid struct pattern, reset and fall through
+            self.pos = saved_pos;
+        } else if path.len() > 1 {
+            // reset path parsing (no struct brace followed)
+            // we consumed extra tokens, need to back up — actually just use path.join("::")
+        }
+        // Simple identifier let (path.len() == 1, no struct brace)
+        if path.len() > 1 {
+            // e.g. `let Foo::Bar = ...` — unlikely but handle as ident
+        }
+        let name = if path.len() == 1 { path.into_iter().next().unwrap() } else { path.join("::") };
         let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_ty()?) } else { None };
         let init = if self.eat(&TokenKind::Eq) { Some(self.parse_expr(0)?) } else { None };
         self.eat(&TokenKind::Semi);
