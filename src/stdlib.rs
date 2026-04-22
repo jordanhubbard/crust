@@ -1502,14 +1502,87 @@ pub fn call_method(
         (Value::Float(_), "tan") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Float(f.tan()))) } else { None }
         }
+        (Value::Float(_), "exp") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.exp()))) } else { None }
+        }
+        (Value::Float(_), "exp2") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.exp2()))) } else { None }
+        }
         (Value::Float(_), "ln") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Float(f.ln()))) } else { None }
+        }
+        (Value::Float(_), "asin") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.asin()))) } else { None }
+        }
+        (Value::Float(_), "acos") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.acos()))) } else { None }
+        }
+        (Value::Float(_), "atan") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.atan()))) } else { None }
+        }
+        (Value::Float(_), "sinh") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.sinh()))) } else { None }
+        }
+        (Value::Float(_), "cosh") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.cosh()))) } else { None }
+        }
+        (Value::Float(_), "tanh") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.tanh()))) } else { None }
+        }
+        (Value::Float(_), "powi") => {
+            if let Value::Float(f) = recv {
+                let n = match args.into_iter().next() {
+                    Some(Value::Int(n)) => n as i32,
+                    Some(Value::Float(x)) => x as i32,
+                    _ => 0,
+                };
+                Some(Ok(Value::Float(f.powi(n))))
+            } else { None }
+        }
+        (Value::Float(_), "to_radians") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.to_radians()))) } else { None }
+        }
+        (Value::Float(_), "to_degrees") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.to_degrees()))) } else { None }
         }
         (Value::Float(_), "log2") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Float(f.log2()))) } else { None }
         }
         (Value::Float(_), "log10") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Float(f.log10()))) } else { None }
+        }
+        (Value::Float(_), "cbrt") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.cbrt()))) } else { None }
+        }
+        (Value::Float(_), "atan2") => {
+            if let Value::Float(f) = recv {
+                let other = match args.into_iter().next() {
+                    Some(Value::Float(x)) => x,
+                    Some(Value::Int(x)) => x as f64,
+                    _ => return Some(Err(err("atan2 requires a float argument"))),
+                };
+                Some(Ok(Value::Float(f.atan2(other))))
+            } else { None }
+        }
+        (Value::Float(_), "hypot") => {
+            if let Value::Float(f) = recv {
+                let other = match args.into_iter().next() {
+                    Some(Value::Float(x)) => x,
+                    Some(Value::Int(x)) => x as f64,
+                    _ => 0.0,
+                };
+                Some(Ok(Value::Float(f.hypot(other))))
+            } else { None }
+        }
+        (Value::Float(_), "log") => {
+            if let Value::Float(f) = recv {
+                let base = match args.into_iter().next() {
+                    Some(Value::Float(x)) => x,
+                    Some(Value::Int(x)) => x as f64,
+                    _ => std::f64::consts::E,
+                };
+                Some(Ok(Value::Float(f.log(base))))
+            } else { None }
         }
         (Value::Float(_), "is_nan") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Bool(f.is_nan()))) } else { None }
