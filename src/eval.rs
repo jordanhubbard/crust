@@ -26,6 +26,67 @@ fn err(msg: impl Into<String>) -> Signal {
     Signal::Err(CrustError::runtime(msg))
 }
 
+// ── Format string normalization ───────────────────────────────────────────────
+
+/// Expand named {name} and positional {N} specs into sequential {}, reordering args.
+fn normalize_format_args(fmt: &str, positional: Vec<Value>, named: &HashMap<String, Value>) -> (String, Vec<Value>) {
+    let mut new_fmt = String::new();
+    let mut new_args: Vec<Value> = Vec::new();
+    let mut pos_idx = 0;
+    let mut chars = fmt.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            if chars.peek() == Some(&'{') {
+                new_fmt.push('{');
+                new_fmt.push(chars.next().unwrap());
+                continue;
+            }
+            let mut spec = String::new();
+            for ch in &mut chars { if ch == '}' { break; } spec.push(ch); }
+
+            // Split spec into ref part and format part (e.g. "val:>10" → "val" and ":>10")
+            let (ref_part, fmt_part) = if let Some(colon) = spec.find(':') {
+                (&spec[..colon], &spec[colon..]) // fmt_part includes the colon
+            } else {
+                (spec.as_str(), "")
+            };
+
+            let val = if ref_part.is_empty() {
+                // {} or {:spec} — sequential
+                let v = positional.get(pos_idx).cloned().unwrap_or(Value::Unit);
+                pos_idx += 1;
+                v
+            } else if let Ok(idx) = ref_part.parse::<usize>() {
+                // {0} or {1:spec} — positional by index
+                positional.get(idx).cloned().unwrap_or(Value::Unit)
+            } else {
+                // {name} or {name:spec} — named arg
+                if let Some(v) = named.get(ref_part) {
+                    v.clone()
+                } else {
+                    // fallback: treat as sequential
+                    let v = positional.get(pos_idx).cloned().unwrap_or(Value::Unit);
+                    pos_idx += 1;
+                    v
+                }
+            };
+
+            new_fmt.push('{');
+            new_fmt.push_str(fmt_part); // ":spec" or ""
+            new_fmt.push('}');
+            new_args.push(val);
+        } else if c == '}' && chars.peek() == Some(&'}') {
+            new_fmt.push('}');
+            new_fmt.push(chars.next().unwrap());
+        } else {
+            new_fmt.push(c);
+        }
+    }
+
+    (new_fmt, new_args)
+}
+
 // ── Pattern binding ───────────────────────────────────────────────────────────
 
 fn bind_pat(pat: &Pat, val: Value, env: &Rc<RefCell<Env>>) {
@@ -1099,12 +1160,31 @@ impl Interpreter {
             Value::Str(s) => s,
             other => return Ok(other.to_string()),
         };
-        let rest: Vec<Value> = args[1..].iter()
-            .map(|a| self.eval_expr(a, Rc::clone(&env)))
-            .collect::<Result<_, _>>()?;
+        // Separate positional args from named args (key = value)
+        let mut positional: Vec<Value> = Vec::new();
+        let mut named: HashMap<String, Value> = HashMap::new();
+        for arg_expr in &args[1..] {
+            match arg_expr {
+                Expr::Assign(lhs, rhs) => {
+                    if let Expr::Ident(key) = lhs.as_ref() {
+                        let val = self.eval_expr(rhs, Rc::clone(&env))?;
+                        named.insert(key.clone(), val);
+                    } else {
+                        let val = self.eval_expr(arg_expr, Rc::clone(&env))?;
+                        positional.push(val);
+                    }
+                }
+                _ => {
+                    let val = self.eval_expr(arg_expr, Rc::clone(&env))?;
+                    positional.push(val);
+                }
+            }
+        }
+        // Normalize: expand {name} and {N} into sequential {} with reordered args
+        let (resolved_fmt, rest) = normalize_format_args(&fmt, positional, &named);
         // For user types with Display impls, pre-convert on {} specs
-        let rest = self.apply_display_impls(&fmt, rest, env)?;
-        crate::stdlib::format_string(&fmt, &rest).map_err(Signal::Err)
+        let rest = self.apply_display_impls(&resolved_fmt, rest, Rc::clone(&env))?;
+        crate::stdlib::format_string(&resolved_fmt, &rest).map_err(Signal::Err)
     }
 
     /// For `{}` (non-debug) format specs, replace user struct/enum values with
