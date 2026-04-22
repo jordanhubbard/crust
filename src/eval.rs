@@ -71,7 +71,11 @@ fn coerce_by_ty(val: Value, ty: Option<&Ty>) -> Value {
             // Vec annotation: if we got a HashMap, convert to Vec<(k, v)>
             if let Value::HashMap(m) = val {
                 let mut pairs: Vec<Value> = m.into_iter()
-                    .map(|(k, v)| Value::Tuple(vec![Value::Str(k), v]))
+                    .map(|(k, v)| {
+                        // Try to restore numeric keys
+                        let kv = if let Ok(n) = k.parse::<i64>() { Value::Int(n) } else { Value::Str(k) };
+                        Value::Tuple(vec![kv, v])
+                    })
                     .collect();
                 pairs.sort_by_key(|p| if let Value::Tuple(t) = p { t[0].to_string() } else { String::new() });
                 return Value::Vec(pairs);
@@ -80,25 +84,32 @@ fn coerce_by_ty(val: Value, ty: Option<&Ty>) -> Value {
         }
         Some(Ty::Generic(name, _)) if name == "HashMap" => {
             // HashMap annotation: if we got a Vec of 2-tuples, convert to HashMap
-            if let Value::Vec(ref v) = val {
-                if !v.is_empty() && v.iter().all(|x| matches!(x, Value::Tuple(t) if t.len() == 2)) {
-                    if let Value::Vec(v) = val {
-                        let mut m = std::collections::HashMap::new();
-                        for item in v {
-                            if let Value::Tuple(mut t) = item {
-                                let v2 = t.pop().unwrap();
-                                let k = t.pop().unwrap().to_string();
-                                m.insert(k, v2);
-                            }
-                        }
-                        return Value::HashMap(m);
-                    }
-                }
-            }
-            val
+            vec_tuples_to_hashmap(val)
+        }
+        Some(Ty::Named(name)) if name == "HashMap" => {
+            vec_tuples_to_hashmap(val)
         }
         _ => val,
     }
+}
+
+fn vec_tuples_to_hashmap(val: Value) -> Value {
+    if let Value::Vec(ref v) = val {
+        if !v.is_empty() && v.iter().all(|x| matches!(x, Value::Tuple(t) if t.len() == 2)) {
+            if let Value::Vec(v) = val {
+                let mut m = std::collections::HashMap::new();
+                for item in v {
+                    if let Value::Tuple(mut t) = item {
+                        let v2 = t.pop().unwrap();
+                        let k = t.pop().unwrap().to_string();
+                        m.insert(k, v2);
+                    }
+                }
+                return Value::HashMap(m);
+            }
+        }
+    }
+    val
 }
 
 // ── EntryRef helpers ──────────────────────────────────────────────────────────
@@ -191,7 +202,7 @@ impl Interpreter {
     fn register_item(&mut self, item: Item) -> Result<(), CrustError> {
         match item {
             Item::Fn(def) => {
-                self.fns.insert(def.name.clone(), CrustFn { params: def.params, body: def.body, captured: None });
+                self.fns.insert(def.name.clone(), CrustFn { params: def.params, ret_ty: def.ret_ty, body: def.body, captured: None });
             }
             Item::Struct(def) => { self.structs.insert(def.name.clone(), def); }
             Item::Enum(_) => {} // enums are constructed by name at runtime
@@ -259,8 +270,8 @@ impl Interpreter {
         }
 
         let result = match self.eval_block(&cfn.body, Rc::clone(&child)) {
-            Ok(v) => Ok(v),
-            Err(Signal::Return(v)) => Ok(v),
+            Ok(v) => Ok(coerce_by_ty(v, cfn.ret_ty.as_ref())),
+            Err(Signal::Return(v)) => Ok(coerce_by_ty(v, cfn.ret_ty.as_ref())),
             Err(e) => Err(e),
         };
 
@@ -739,6 +750,7 @@ impl Interpreter {
                 body_stmts.push(Stmt::Expr(*body.clone()));
                 let cfn = CrustFn {
                     params: fn_params,
+                    ret_ty: None,
                     body: Block { stmts: body_stmts, tail: None },
                     captured: Some(Rc::clone(&env)),
                 };
@@ -1208,7 +1220,7 @@ impl Interpreter {
             });
 
         if let Some(fdef) = user_method {
-            let cfn = CrustFn { params: fdef.params, body: fdef.body, captured: None };
+            let cfn = CrustFn { params: fdef.params, ret_ty: fdef.ret_ty, body: fdef.body, captured: None };
             return self.call_crust_fn(&cfn, args, self_val);
         }
 

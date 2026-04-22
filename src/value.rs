@@ -3,11 +3,12 @@ use std::fmt;
 use std::rc::Rc;
 use std::cell::RefCell;
 
-use crate::ast::{Block, Param};
+use crate::ast::{Block, Param, Ty};
 
 #[derive(Debug, Clone)]
 pub struct CrustFn {
     pub params: Vec<Param>,
+    pub ret_ty: Option<Ty>,
     pub body: Block,
     pub captured: Option<Rc<RefCell<crate::env::Env>>>,
 }

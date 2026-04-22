@@ -615,10 +615,9 @@ pub fn call_method(
             } else { None }
         }
         (Value::Vec(_), "collect") => {
+            // collect::<Result<Vec<T>, E>>() — first Err short-circuits
             if let Value::Vec(ref v) = recv {
-                // collect::<Result<Vec<T>, E>>() — first Err short-circuits
-                let all_result = !v.is_empty() && v.iter().all(|x| matches!(x, Value::Result_(_)));
-                if all_result {
+                if !v.is_empty() && v.iter().all(|x| matches!(x, Value::Result_(_))) {
                     if let Value::Vec(v) = recv {
                         let mut items = Vec::new();
                         for item in v {
@@ -630,20 +629,6 @@ pub fn call_method(
                         }
                         return Some(Ok(Value::Result_(Ok(Box::new(Value::Vec(items))))));
                     }
-                }
-                // collect::<HashMap<K,V>>() — Vec of 2-tuples → HashMap
-                if !v.is_empty() && v.iter().all(|x| matches!(x, Value::Tuple(t) if t.len() == 2)) {
-                    let mut m = std::collections::HashMap::new();
-                    if let Value::Vec(v) = recv {
-                        for item in v {
-                            if let Value::Tuple(mut t) = item {
-                                let val = t.pop().unwrap();
-                                let key = t.pop().unwrap().to_string();
-                                m.insert(key, val);
-                            }
-                        }
-                    }
-                    return Some(Ok(Value::HashMap(m)));
                 }
             }
             Some(Ok(recv))
