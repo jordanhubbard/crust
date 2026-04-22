@@ -528,9 +528,17 @@ impl Parser {
                 }
             }
             TokenKind::Impl => {
-                // impl Trait — skip and treat as Named("impl")
+                // impl Trait + Bound + 'static — skip all and treat as Named("impl")
                 self.advance();
-                let _ = self.parse_ty()?;  // consume the trait type
+                let _ = self.parse_ty()?;  // consume the primary trait type
+                // consume additional trait bounds: + Trait + 'lifetime
+                while self.check(&TokenKind::Plus) {
+                    self.advance(); // consume +
+                    // skip lifetime bound like 'static
+                    if matches!(self.peek(), TokenKind::Ident(_)) {
+                        let _ = self.parse_ty()?;
+                    }
+                }
                 Ok(Ty::Named("impl".to_string()))
             }
             TokenKind::Underscore => {
