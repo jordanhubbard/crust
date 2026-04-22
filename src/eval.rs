@@ -809,6 +809,19 @@ impl Interpreter {
                     if let Expr::Field(struct_expr, field_name) = receiver.as_ref() {
                         let struct_ident = match struct_expr.as_ref() { Expr::Ident(n) => Some(n.clone()), _ => None };
                         if let Some(struct_var) = struct_ident {
+                            // Special case: HashMap::get_mut → return EntryRef so field mutations write back
+                            if method == "get_mut" {
+                                if let Value::HashMap(ref m) = recv_val {
+                                    let key = arg_vals.first().map(|v| v.to_string()).unwrap_or_default();
+                                    let map_name = format!("__sf__::{}::{}", struct_var, field_name);
+                                    let entry_ref = if m.contains_key(&key) {
+                                        Value::Option_(Some(Box::new(Value::EntryRef { map_name, key })))
+                                    } else {
+                                        Value::Option_(None)
+                                    };
+                                    return Ok(entry_ref);
+                                }
+                            }
                             if let Some((ret_val, new_field)) = crate::stdlib::call_method_mut(
                                 recv_val.clone(), method, arg_vals.clone(), self
                             ) {
