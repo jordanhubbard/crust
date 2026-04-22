@@ -1335,12 +1335,6 @@ pub fn call_method(
                 Some(Ok(Value::Option_(s.chars().next().map(|c| Box::new(Value::Char(c))))))
             } else { None }
         }
-        (Value::Str(_), "bytes") => {
-            if let Value::Str(s) = recv {
-                let bs: Vec<Value> = s.bytes().map(|b| Value::Int(b as i64)).collect();
-                Some(Ok(Value::Vec(bs)))
-            } else { None }
-        }
         (Value::Str(_), "replace") => {
             if let Value::Str(s) = recv {
                 let from = args.first().map(|v| v.to_string()).unwrap_or_default();
@@ -1912,7 +1906,7 @@ pub fn call_method(
                 _ => None,
             }
         }
-        (Value::Option_(_), "and_then" | "flat_map") => {
+        (Value::Option_(_), "and_then" | "and_then_opt" | "flat_map") => {
             match recv {
                 Value::Option_(None) => Some(Ok(Value::Option_(None))),
                 Value::Option_(Some(v)) => {
@@ -1952,6 +1946,27 @@ pub fn call_method(
                 Value::Option_(None) => Some(Ok(Value::Option_(None))),
                 Value::Option_(Some(inner)) => Some(Ok(*inner)),
                 other => Some(Ok(other)),
+            }
+        }
+        (Value::Option_(_), "and") => {
+            match recv {
+                Value::Option_(None) => Some(Ok(Value::Option_(None))),
+                Value::Option_(Some(_)) => Some(Ok(args.into_iter().next().unwrap_or(Value::Option_(None)))),
+                _ => None,
+            }
+        }
+        (Value::Option_(_), "transpose") => {
+            // Option<Result<T,E>> -> Result<Option<T>,E>
+            match recv {
+                Value::Option_(None) => Some(Ok(Value::Result_(Ok(Box::new(Value::Option_(None)))))),
+                Value::Option_(Some(inner)) => {
+                    match *inner {
+                        Value::Result_(Ok(v)) => Some(Ok(Value::Result_(Ok(Box::new(Value::Option_(Some(v))))))),
+                        Value::Result_(Err(e)) => Some(Ok(Value::Result_(Err(e)))),
+                        other => Some(Ok(Value::Result_(Ok(Box::new(Value::Option_(Some(Box::new(other)))))))),
+                    }
+                }
+                _ => None,
             }
         }
         (Value::Option_(_), "unwrap_or_default") => {
