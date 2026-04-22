@@ -1351,8 +1351,8 @@ impl Parser {
                     _ => Err(CrustError::parse("expected literal after - in pattern", self.line())),
                 }
             }
-            TokenKind::And => {
-                self.advance();
+            TokenKind::And | TokenKind::AndAnd => {
+                self.advance(); // consume & or &&
                 self.eat(&TokenKind::Mut);
                 let inner = self.parse_pat_single()?;
                 Ok(Pat::Ref(Box::new(inner)))
