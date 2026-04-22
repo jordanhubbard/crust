@@ -789,6 +789,23 @@ impl Parser {
             // Macro call
             TokenKind::MacroName(name) => {
                 self.advance();
+                // matches!(expr, pat1 | pat2 | ...) → match expr { pat => true, _ => false }
+                if name == "matches" {
+                    self.expect(&TokenKind::LParen)?;
+                    let scrutinee = self.parse_expr(0)?;
+                    self.expect(&TokenKind::Comma)?;
+                    let pat = self.parse_pat()?;
+                    // skip optional guard (if ...) and extra alternatives
+                    while self.eat(&TokenKind::Or) { let _ = self.parse_pat()?; }
+                    self.expect(&TokenKind::RParen)?;
+                    return Ok(Expr::Match {
+                        scrutinee: Box::new(scrutinee),
+                        arms: vec![
+                            crate::ast::MatchArm { pat, guard: None, body: Expr::Lit(Lit::Bool(true)) },
+                            crate::ast::MatchArm { pat: Pat::Wild, guard: None, body: Expr::Lit(Lit::Bool(false)) },
+                        ],
+                    });
+                }
                 let (open, close) = if self.check(&TokenKind::LParen) {
                     (TokenKind::LParen, TokenKind::RParen)
                 } else if self.check(&TokenKind::LBracket) {
