@@ -916,14 +916,18 @@ impl Parser {
                     self.expect(&TokenKind::LParen)?;
                     let scrutinee = self.parse_expr(0)?;
                     self.expect(&TokenKind::Comma)?;
-                    let pat = self.parse_pat()?;
-                    // skip optional guard (if ...) and extra alternatives
-                    while self.eat(&TokenKind::Or) { let _ = self.parse_pat()?; }
+                    let mut pats = vec![self.parse_pat()?];
+                    while self.eat(&TokenKind::Or) { pats.push(self.parse_pat()?); }
+                    // optional guard: if <expr>
+                    let guard = if self.eat(&TokenKind::If) {
+                        Some(self.parse_expr(0)?)
+                    } else { None };
                     self.expect(&TokenKind::RParen)?;
+                    let pat = if pats.len() == 1 { pats.remove(0) } else { Pat::Or(pats) };
                     return Ok(Expr::Match {
                         scrutinee: Box::new(scrutinee),
                         arms: vec![
-                            crate::ast::MatchArm { pat, guard: None, body: Expr::Lit(Lit::Bool(true)) },
+                            crate::ast::MatchArm { pat, guard, body: Expr::Lit(Lit::Bool(true)) },
                             crate::ast::MatchArm { pat: Pat::Wild, guard: None, body: Expr::Lit(Lit::Bool(false)) },
                         ],
                     });
