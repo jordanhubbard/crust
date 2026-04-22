@@ -1085,8 +1085,30 @@ pub fn call_method(
         }
         (Value::Str(_), "split") => {
             if let Value::Str(s) = recv {
-                let sep = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
-                let parts: Vec<Value> = s.split(&sep[..]).map(|p| Value::Str(p.to_string())).collect();
+                let sep_arg = args.into_iter().next().unwrap_or(Value::Unit);
+                let parts: Vec<Value> = match sep_arg {
+                    Value::Fn(cfn) => {
+                        // Split by closure predicate on chars
+                        let mut result = Vec::new();
+                        let mut current = String::new();
+                        for c in s.chars() {
+                            match interp.call_crust_fn(&cfn, vec![Value::Char(c)], None) {
+                                Ok(v) if v.is_truthy() => {
+                                    result.push(Value::Str(current.clone()));
+                                    current.clear();
+                                }
+                                _ => current.push(c),
+                            }
+                        }
+                        result.push(Value::Str(current));
+                        result
+                    }
+                    Value::Char(c) => s.split(c).map(|p| Value::Str(p.to_string())).collect(),
+                    other => {
+                        let sep = other.to_string();
+                        s.split(&sep[..]).map(|p| Value::Str(p.to_string())).collect()
+                    }
+                };
                 Some(Ok(Value::Vec(parts)))
             } else { None }
         }
@@ -1301,7 +1323,10 @@ pub fn call_method(
         (Value::Float(_), "is_finite") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Bool(f.is_finite()))) } else { None }
         }
-        (Value::Float(_), "to_string" | "clone") => Some(Ok(recv)),
+        (Value::Float(_), "to_string") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Str(f.to_string()))) } else { None }
+        }
+        (Value::Float(_), "clone") => Some(Ok(recv)),
         (Value::Float(_), "max") => {
             if let Value::Float(f) = recv {
                 let other = match args.into_iter().next() {
@@ -1435,7 +1460,10 @@ pub fn call_method(
                 Some(Ok(Value::Int(n.wrapping_add(rhs))))
             } else { None }
         }
-        (Value::Int(_), "to_string" | "clone") => Some(Ok(recv)),
+        (Value::Int(_), "to_string") => {
+            if let Value::Int(n) = recv { Some(Ok(Value::Str(n.to_string()))) } else { None }
+        }
+        (Value::Int(_), "clone") => Some(Ok(recv)),
         (Value::Int(_), "count_ones") => {
             if let Value::Int(n) = recv { Some(Ok(Value::Int(n.count_ones() as i64))) } else { None }
         }
@@ -1467,14 +1495,26 @@ pub fn call_method(
         (Value::Char(_), "is_numeric" | "is_ascii_digit") => {
             if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_ascii_digit()))) } else { None }
         }
-        (Value::Char(_), "is_whitespace") => {
+        (Value::Char(_), "is_whitespace" | "is_ascii_whitespace") => {
             if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_whitespace()))) } else { None }
         }
-        (Value::Char(_), "is_uppercase") => {
-            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_uppercase()))) } else { None }
+        (Value::Char(_), "is_uppercase" | "is_ascii_uppercase") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_ascii_uppercase()))) } else { None }
         }
-        (Value::Char(_), "is_lowercase") => {
-            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_lowercase()))) } else { None }
+        (Value::Char(_), "is_lowercase" | "is_ascii_lowercase") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_ascii_lowercase()))) } else { None }
+        }
+        (Value::Char(_), "is_ascii") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_ascii()))) } else { None }
+        }
+        (Value::Char(_), "is_ascii_alphabetic") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_ascii_alphabetic()))) } else { None }
+        }
+        (Value::Char(_), "is_ascii_alphanumeric") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_ascii_alphanumeric()))) } else { None }
+        }
+        (Value::Char(_), "is_ascii_punctuation") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_ascii_punctuation()))) } else { None }
         }
         (Value::Char(_), "to_string") => {
             if let Value::Char(c) = recv { Some(Ok(Value::Str(c.to_string()))) } else { None }
@@ -2111,7 +2151,8 @@ pub fn call_method(
 
         // ── Universal ─────────────────────────────────────────────────────────
         (_, "copied" | "cloned") => Some(Ok(recv)),  // identity in Level 0
-        (_, "to_string" | "clone") => Some(Ok(recv)),
+        (_, "to_string") => Some(Ok(Value::Str(recv.to_string()))),
+        (_, "clone") => Some(Ok(recv)),
         (_, "type_name") => Some(Ok(Value::Str(recv.type_name().to_string()))),
         // Reference coercions — identity in Level 0
         (_, "as_str" | "as_ref" | "as_mut" | "as_slice" | "borrow" | "borrow_mut"
