@@ -262,6 +262,34 @@ pub fn call_method_mut(
     }
 }
 
+// ── Call any Value as a function with given args ──────────────────────────────
+
+pub fn call_value_as_fn(func: &Value, args: Vec<Value>, interp: &mut Interpreter) -> Result<Value, crate::eval::Signal> {
+    use crate::eval::Signal;
+    use crate::error::CrustError;
+    match func {
+        Value::Fn(cfn) => interp.call_crust_fn(cfn, args, None),
+        Value::Enum { type_name, variant, .. } => {
+            // e.g. f64::max, i64::min, Ord::max  →  call_builtin("f64::max", args)
+            let key = format!("{}::{}", type_name, variant);
+            if let Some(r) = call_builtin(&key, args.clone(), interp) {
+                return r;
+            }
+            // fallback: treat variant as a free function name
+            if let Some(r) = call_builtin(variant, args.clone(), interp) {
+                return r;
+            }
+            // fallback: try as a method on the first argument
+            if let Some((first, rest)) = args.split_first() {
+                let r = call_method("", variant, Some(first.clone()), rest.to_vec(), interp);
+                if let Some(result) = r { return result; }
+            }
+            Err(Signal::Err(CrustError::runtime(format!("cannot call {}::{} as fn", type_name, variant))))
+        }
+        _ => Err(Signal::Err(CrustError::runtime(format!("value is not callable: {:?}", func)))),
+    }
+}
+
 // ── Free built-in functions ───────────────────────────────────────────────────
 
 pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> Option<R> {
@@ -646,21 +674,36 @@ pub fn call_method(
                 Some(Ok(Value::Vec(result)))
             } else { None }
         }
-        (Value::Vec(_), "fold" | "reduce") => {
+        (Value::Vec(_), "fold") => {
             if let Value::Vec(v) = recv {
                 let mut arg_iter = args.into_iter();
                 let mut acc = arg_iter.next().unwrap_or(Value::Int(0));
                 let func = arg_iter.next().unwrap_or(Value::Unit);
                 for item in v {
-                    acc = match &func {
-                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![acc, item], None) {
-                            Ok(v) => v,
-                            Err(e) => return Some(Err(e)),
-                        },
-                        _ => item,
+                    acc = match call_value_as_fn(&func, vec![acc, item], interp) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
                     };
                 }
                 Some(Ok(acc))
+            } else { None }
+        }
+        (Value::Vec(_), "reduce") => {
+            if let Value::Vec(v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                let mut iter = v.into_iter();
+                let first = match iter.next() {
+                    None => return Some(Ok(Value::Option_(None))),
+                    Some(v) => v,
+                };
+                let mut acc = first;
+                for item in iter {
+                    acc = match call_value_as_fn(&func, vec![acc, item], interp) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                }
+                Some(Ok(Value::Option_(Some(Box::new(acc)))))
             } else { None }
         }
         (Value::Vec(_), "enumerate") => {
