@@ -1467,6 +1467,16 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Unit,     Value::Unit)     => true,
         (Value::Option_(None), Value::Option_(None)) => true,
         (Value::Option_(Some(a)), Value::Option_(Some(b))) => values_equal(a, b),
+        (Value::Enum { variant: va, inner: None, .. }, Value::Enum { variant: vb, inner: None, .. }) => va == vb,
+        (Value::Enum { variant: va, inner: Some(ia), .. }, Value::Enum { variant: vb, inner: Some(ib), .. }) => {
+            va == vb && values_equal(ia, ib)
+        }
+        (Value::Tuple(a), Value::Tuple(b)) => {
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
+        }
+        (Value::Vec(a), Value::Vec(b)) => {
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
+        }
         _ => false,
     }
 }

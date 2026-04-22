@@ -981,6 +981,10 @@ pub fn call_method(
                 for item in v {
                     match item {
                         Value::Vec(inner) => result.extend(inner),
+                        Value::Option_(Some(inner)) => result.push(*inner),
+                        Value::Option_(None) => {}  // skip None
+                        Value::Result_(Ok(inner)) => result.push(*inner),
+                        Value::Result_(Err(_)) => {}  // skip Err
                         other => result.push(other),
                     }
                 }
@@ -1657,7 +1661,11 @@ pub fn call_method(
             }
         }
         (Value::Option_(_), "take") => {
-            Some(Ok(recv)) // at Level 0, take() just returns the value
+            Some(Ok(recv)) // Level 0: returns the current value (mut semantics not tracked)
+        }
+        (Value::Option_(_), "replace") => {
+            // replace(new) -> old value; at Level 0 returns old, mutation not tracked
+            Some(Ok(recv))
         }
         (Value::Option_(_), "as_ref" | "as_deref") => {
             Some(Ok(recv)) // at Level 0, ref = value
