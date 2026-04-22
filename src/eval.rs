@@ -854,7 +854,7 @@ impl Interpreter {
                     (Value::Int(n), "char") => Value::Char(char::from_u32(n as u32).unwrap_or('\0')),
                     (Value::Int(n), "u8") => Value::Int(n & 0xFF),
                     (Value::Int(n), "f64"|"f32") => Value::Float(n as f64),
-                    (Value::Float(f), "i64"|"i32"|"usize"|"isize") => Value::Int(f as i64),
+                    (Value::Float(f), "i64"|"i32"|"i16"|"i8"|"u64"|"u32"|"u16"|"u8"|"usize"|"isize") => Value::Int(f as i64),
                     (Value::Bool(b), "i64"|"i32") => Value::Int(b as i64),
                     (other, _) => other,
                 })

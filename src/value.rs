@@ -76,7 +76,19 @@ impl fmt::Display for Value {
             }
             Value::Enum { type_name, variant, inner } => {
                 write!(f, "{}::{}", type_name, variant)?;
-                if let Some(v) = inner { write!(f, "({})", v)?; }
+                if let Some(v) = inner {
+                    match v.as_ref() {
+                        Value::Tuple(items) => {
+                            write!(f, "(")?;
+                            for (i, item) in items.iter().enumerate() {
+                                if i > 0 { write!(f, ", ")?; }
+                                write!(f, "{}", item)?;
+                            }
+                            write!(f, ")")?;
+                        }
+                        other => { write!(f, "({})", other)?; }
+                    }
+                }
                 Ok(())
             }
             Value::Fn(_) => write!(f, "<fn>"),
