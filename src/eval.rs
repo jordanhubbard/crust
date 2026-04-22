@@ -107,6 +107,8 @@ pub struct Interpreter {
     pub output: Vec<String>,
     // Populated by call_crust_fn when a &mut self method modifies self
     pub self_writeback: Option<Value>,
+    // Populated by call_crust_fn for &mut params: (param_index, new_value)
+    pub mut_writebacks: Vec<(usize, Value)>,
 }
 
 impl Interpreter {
@@ -118,6 +120,7 @@ impl Interpreter {
             traits: HashMap::new(),
             output: Vec::new(),
             self_writeback: None,
+            mut_writebacks: Vec::new(),
         }
     }
 
@@ -227,6 +230,19 @@ impl Interpreter {
         // Capture modified self for &mut self methods
         if has_self {
             self.self_writeback = child.borrow().get("self");
+        }
+
+        // Capture modified &mut params for writeback
+        self.mut_writebacks.clear();
+        let mut arg_idx = 0usize;
+        for param in &cfn.params {
+            if param.is_self { continue; }
+            if matches!(param.ty, Ty::Ref(true, _)) {
+                if let Some(v) = child.borrow().get(&param.name) {
+                    self.mut_writebacks.push((arg_idx, v));
+                }
+            }
+            arg_idx += 1;
         }
 
         result
@@ -394,17 +410,17 @@ impl Interpreter {
                     .map(|a| self.eval_expr(a, Rc::clone(&env)))
                     .collect::<Result<_, _>>()?;
 
-                match func.as_ref() {
-                    Expr::Ident(name) => self.call_fn(name, arg_vals, env),
+                let result = match func.as_ref() {
+                    Expr::Ident(name) => self.call_fn(name, arg_vals, Rc::clone(&env)),
                     Expr::Path(parts) => {
                         let fn_name = parts.last().unwrap().clone();
                         if parts.len() > 1 {
                             // Use only the immediate type name, stripping namespace prefixes.
                             // std::collections::HashMap::new → type="HashMap", fn="new"
                             let type_name = parts[parts.len()-2].clone();
-                            self.call_method_or_static(&type_name, &fn_name, None, arg_vals, env)
+                            self.call_method_or_static(&type_name, &fn_name, None, arg_vals, Rc::clone(&env))
                         } else {
-                            self.call_fn(&fn_name, arg_vals, env)
+                            self.call_fn(&fn_name, arg_vals, Rc::clone(&env))
                         }
                     }
                     _ => {
@@ -414,7 +430,13 @@ impl Interpreter {
                             _ => Err(err(format!("not a function: {}", func_val.type_name()))),
                         }
                     }
+                };
+                // Write back &mut params
+                let writebacks = std::mem::take(&mut self.mut_writebacks);
+                for (idx, new_val) in writebacks {
+                    apply_mut_writeback(args.get(idx), new_val, &env);
                 }
+                result
             }
 
             Expr::MethodCall { receiver, method, turbofish, args } => {
@@ -532,6 +554,11 @@ impl Interpreter {
                     if let Some(var) = recv_ident_clone {
                         env.borrow_mut().set(&var, new_self);
                     }
+                }
+                // Write back &mut params
+                let writebacks = std::mem::take(&mut self.mut_writebacks);
+                for (idx, new_val) in writebacks {
+                    apply_mut_writeback(args.get(idx), new_val, &env);
                 }
                 Ok(result)
             }
@@ -1158,6 +1185,18 @@ impl Interpreter {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn apply_mut_writeback(arg_expr: Option<&Expr>, new_val: Value, env: &Rc<RefCell<Env>>) {
+    match arg_expr {
+        Some(Expr::Ident(name)) => { env.borrow_mut().set(name, new_val); }
+        Some(Expr::Ref { expr, .. }) => {
+            if let Expr::Ident(name) = expr.as_ref() {
+                env.borrow_mut().set(name, new_val);
+            }
+        }
+        _ => {}
+    }
+}
 
 pub fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     use Value::*;
