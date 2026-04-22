@@ -536,6 +536,19 @@ pub fn call_method(
                 Some(result.map(Value::Vec))
             } else { None }
         }
+        (Value::Vec(_), "for_each") => {
+            if let Value::Vec(v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                for item in v {
+                    if let Value::Fn(cfn) = &func {
+                        if let Err(e) = interp.call_crust_fn(cfn, vec![item], None) {
+                            return Some(Err(e));
+                        }
+                    }
+                }
+                Some(Ok(Value::Unit))
+            } else { None }
+        }
         (Value::Vec(_), "filter") => {
             if let Value::Vec(v) = recv {
                 let func = args.into_iter().next().unwrap_or(Value::Unit);
