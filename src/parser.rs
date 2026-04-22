@@ -1253,7 +1253,11 @@ fn pat_to_str(pat: &Pat) -> String {
     match pat {
         Pat::Ident(s) => s.clone(),
         Pat::Wild => "_".into(),
+        Pat::Ref(inner) => pat_to_str(inner), // &x or &&x → x
         Pat::Tuple(ps) => format!("({})", ps.iter().map(pat_to_str).collect::<Vec<_>>().join(",")),
+        Pat::TupleStruct { fields, .. } => {
+            format!("({})", fields.iter().map(pat_to_str).collect::<Vec<_>>().join(","))
+        }
         _ => "_".into(),
     }
 }

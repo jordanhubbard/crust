@@ -1057,6 +1057,18 @@ impl Interpreter {
                         write_back_entry_map(&map_name, map_val, &env);
                         return Ok(());
                     }
+                } else {
+                    // e.g. *counts.entry(k).or_insert(0) += 1
+                    let inner_val = self.eval_expr(inner, Rc::clone(&env))?;
+                    if let Value::EntryRef { map_name, key } = inner_val {
+                        let mut map_val = lookup_entry_map(&map_name, &env)
+                            .ok_or_else(|| err(format!("no map `{}`", map_name)))?;
+                        if let Value::HashMap(ref mut m) = map_val {
+                            m.insert(key, val);
+                        }
+                        write_back_entry_map(&map_name, map_val, &env);
+                        return Ok(());
+                    }
                 }
                 self.assign(inner, val, env)
             }
