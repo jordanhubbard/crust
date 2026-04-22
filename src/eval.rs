@@ -1557,21 +1557,35 @@ impl Interpreter {
     // ── Method / static call dispatch ─────────────────────────────────────────
 
     pub fn call_method_or_static(&mut self, type_name: &str, method: &str, self_val: Option<Value>, args: Vec<Value>, env: Rc<RefCell<Env>>) -> EvalResult {
-        // 1. User-defined impl methods — try exact type, then enum prefix (AppError::InvalidInput → AppError)
-        let user_method = self.impls.get(type_name)
-            .and_then(|methods| methods.iter().find(|m| m.name == method))
-            .cloned()
-            .or_else(|| {
+        // 1. User-defined impl methods — try all matching methods (handles overloaded From<T>)
+        let candidates: Vec<FnDef> = {
+            let from_type = self.impls.get(type_name)
+                .map(|ms| ms.iter().filter(|m| m.name == method).cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            if from_type.is_empty() {
                 if let Some(prefix) = type_name.rfind("::").map(|i| &type_name[..i]) {
                     self.impls.get(prefix)
-                        .and_then(|methods| methods.iter().find(|m| m.name == method))
-                        .cloned()
-                } else { None }
-            });
+                        .map(|ms| ms.iter().filter(|m| m.name == method).cloned().collect())
+                        .unwrap_or_default()
+                } else { vec![] }
+            } else { from_type }
+        };
 
-        if let Some(fdef) = user_method {
+        if candidates.len() == 1 {
+            let fdef = candidates.into_iter().next().unwrap();
             let cfn = CrustFn { params: fdef.params, ret_ty: fdef.ret_ty, body: fdef.body, captured: None };
             return self.call_crust_fn(&cfn, args, self_val);
+        } else if candidates.len() > 1 {
+            // Multiple overloads: try each, return first success
+            let mut last_err = None;
+            for fdef in candidates {
+                let cfn = CrustFn { params: fdef.params, ret_ty: fdef.ret_ty, body: fdef.body, captured: None };
+                match self.call_crust_fn(&cfn, args.clone(), self_val.clone()) {
+                    Ok(v) => return Ok(v),
+                    Err(e) => last_err = Some(e),
+                }
+            }
+            if let Some(e) = last_err { return Err(e); }
         }
 
         // 2. Built-in methods (instance or static) from stdlib

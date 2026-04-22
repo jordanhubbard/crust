@@ -159,6 +159,55 @@ impl Lexer {
         let mut s = String::from(first);
         let mut is_float = false;
 
+        // Hex literal: 0x or 0X
+        if first == '0' && matches!(self.peek(), Some('x') | Some('X')) {
+            self.advance(); // consume 'x'
+            let mut hex = String::new();
+            while let Some(c) = self.peek() {
+                if c.is_ascii_hexdigit() || c == '_' { hex.push(c); self.advance(); }
+                else { break; }
+            }
+            // strip type suffix (u32, i64, etc.)
+            if self.peek().map_or(false, |c| c.is_alphabetic()) {
+                while self.peek().map_or(false, |c| c.is_alphanumeric() || c == '_') { self.advance(); }
+            }
+            let clean = hex.replace('_', "");
+            return i64::from_str_radix(&clean, 16).map(TokenKind::Int)
+                .map_err(|_| CrustError::parse(format!("invalid hex '{}'", clean), self.line));
+        }
+
+        // Binary literal: 0b or 0B
+        if first == '0' && matches!(self.peek(), Some('b') | Some('B')) {
+            self.advance(); // consume 'b'
+            let mut bin = String::new();
+            while let Some(c) = self.peek() {
+                if c == '0' || c == '1' || c == '_' { bin.push(c); self.advance(); }
+                else { break; }
+            }
+            if self.peek().map_or(false, |c| c.is_alphabetic()) {
+                while self.peek().map_or(false, |c| c.is_alphanumeric() || c == '_') { self.advance(); }
+            }
+            let clean = bin.replace('_', "");
+            return i64::from_str_radix(&clean, 2).map(TokenKind::Int)
+                .map_err(|_| CrustError::parse(format!("invalid binary '{}'", clean), self.line));
+        }
+
+        // Octal literal: 0o or 0O
+        if first == '0' && matches!(self.peek(), Some('o') | Some('O')) {
+            self.advance(); // consume 'o'
+            let mut oct = String::new();
+            while let Some(c) = self.peek() {
+                if matches!(c, '0'..='7') || c == '_' { oct.push(c); self.advance(); }
+                else { break; }
+            }
+            if self.peek().map_or(false, |c| c.is_alphabetic()) {
+                while self.peek().map_or(false, |c| c.is_alphanumeric() || c == '_') { self.advance(); }
+            }
+            let clean = oct.replace('_', "");
+            return i64::from_str_radix(&clean, 8).map(TokenKind::Int)
+                .map_err(|_| CrustError::parse(format!("invalid octal '{}'", clean), self.line));
+        }
+
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() || c == '_' {
                 s.push(c); self.advance();
