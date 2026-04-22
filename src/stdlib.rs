@@ -1437,7 +1437,13 @@ pub fn call_method(
                 Some(Ok(Value::Vec(pairs)))
             } else { None }
         }
-        (Value::Str(_), "as_bytes" | "as_str") => Some(Ok(recv)),
+        (Value::Str(_), "as_str") => Some(Ok(recv)),
+        (Value::Str(_), "as_bytes" | "bytes") => {
+            if let Value::Str(s) = recv {
+                let bytes: Vec<Value> = s.bytes().map(|b| Value::Int(b as i64)).collect();
+                Some(Ok(Value::Vec(bytes)))
+            } else { None }
+        }
         (Value::Str(_), "push_str") => {
             // In Rust this mutates; at Level 0 we return a concatenated string
             if let Value::Str(mut s) = recv {
