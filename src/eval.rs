@@ -698,6 +698,28 @@ impl Interpreter {
                 if let Some(new_self) = self.self_writeback.take() {
                     if let Some(var) = recv_ident_clone {
                         env.borrow_mut().set(&var, new_self);
+                    } else if let Expr::Index(vec_expr, idx_expr) = receiver.as_ref() {
+                        // students[i].method() — write new_self back to vec[i]
+                        if let Expr::Ident(vec_var) = vec_expr.as_ref() {
+                            let idx_val = self.eval_expr(idx_expr, Rc::clone(&env))?;
+                            let vec_opt = env.borrow().get(vec_var);
+                            if let Some(Value::Vec(mut v)) = vec_opt {
+                                if let Value::Int(i) = idx_val {
+                                    let i = i as usize;
+                                    if i < v.len() { v[i] = new_self; }
+                                    env.borrow_mut().set(vec_var, Value::Vec(v));
+                                }
+                            }
+                        }
+                    } else if let Expr::Field(struct_expr, field_name) = receiver.as_ref() {
+                        // obj.field.method() — write new_self back to obj.field
+                        if let Expr::Ident(struct_var) = struct_expr.as_ref() {
+                            let sv = env.borrow().get(struct_var);
+                            if let Some(Value::Struct { type_name: sty, mut fields }) = sv {
+                                fields.insert(field_name.clone(), new_self);
+                                env.borrow_mut().set(struct_var, Value::Struct { type_name: sty, fields });
+                            }
+                        }
                     }
                 }
                 // Write back &mut params
