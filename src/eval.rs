@@ -1004,13 +1004,22 @@ impl Interpreter {
                 // Check if it's an enum variant name (None, Some, etc.) used as a pattern
                 match (name.as_str(), val) {
                     ("None", Value::Option_(None)) => true,
+                    ("None", _) => false, // None pattern only matches None
                     ("true", Value::Bool(true)) => true,
+                    ("true", _) => false,
                     ("false", Value::Bool(false)) => true,
+                    ("false", _) => false,
                     (n, _) if n.contains("::") => {
                         // Path pattern like MyEnum::Variant
-                        if let Value::Enum { variant, .. } = val {
-                            n.ends_with(variant.as_str())
-                        } else { false }
+                        match val {
+                            Value::Enum { variant, .. } => n.ends_with(variant.as_str()),
+                            Value::Struct { type_name, .. } => n == type_name || type_name.ends_with(&format!("::{}", n.rsplit("::").next().unwrap_or(n))),
+                            _ => false,
+                        }
+                    }
+                    // Uppercase single-word idents that look like enum variants — check against enums
+                    (n, Value::Enum { variant, .. }) if n.chars().next().map_or(false, |c| c.is_uppercase()) => {
+                        n == variant.as_str()
                     }
                     _ => {
                         // Binding pattern

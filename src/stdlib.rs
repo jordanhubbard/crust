@@ -1163,6 +1163,13 @@ pub fn call_method(
             } else { None }
         }
         (Value::Str(_), "as_bytes" | "as_str") => Some(Ok(recv)),
+        // Vec<char>::as_str() — collect chars back into a String (Chars iterator pattern)
+        (Value::Vec(_), "as_str") => {
+            if let Value::Vec(v) = recv {
+                let s: String = v.iter().filter_map(|c| if let Value::Char(ch) = c { Some(*ch) } else { None }).collect();
+                Some(Ok(Value::Str(s)))
+            } else { None }
+        }
         (Value::Str(_), "push_str") => {
             // In Rust this mutates; at Level 0 we return a concatenated string
             if let Value::Str(mut s) = recv {
