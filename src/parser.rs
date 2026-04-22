@@ -1263,6 +1263,8 @@ impl Parser {
                 match &self.tokens[i].kind {
                     // `{ field: expr }` — definitely a struct literal
                     TokenKind::Colon => true,
+                    // `{ field }` — single shorthand field, treat as struct literal
+                    TokenKind::RBrace => true,
                     // `{ field, ... }` — struct shorthand only if next field also ends in `:` or `,`
                     TokenKind::Comma => {
                         // Scan ahead: if any field has `:` it's a struct lit
