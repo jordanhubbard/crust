@@ -219,6 +219,21 @@ impl Parser {
         let name = self.expect_ident()?;
         self.skip_generics();
         self.skip_where();
+        if self.eat(&TokenKind::LParen) {
+            // Tuple struct: struct Foo(T1, T2);
+            let mut fields = Vec::new();
+            let mut idx = 0usize;
+            while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
+                self.eat(&TokenKind::Pub);
+                let ty = self.parse_ty()?;
+                fields.push((idx.to_string(), ty));
+                idx += 1;
+                if !self.eat(&TokenKind::Comma) { break; }
+            }
+            self.expect(&TokenKind::RParen)?;
+            self.eat(&TokenKind::Semi);
+            return Ok(StructDef { name, fields });
+        }
         self.expect(&TokenKind::LBrace)?;
         let mut fields = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {

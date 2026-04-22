@@ -261,6 +261,17 @@ impl Interpreter {
             return self.call_crust_fn(&cfn, args, None);
         }
 
+        // Tuple struct constructor: struct Foo(T1, T2) → call Foo(v1, v2) creates struct
+        if let Some(sdef) = self.structs.get(name).cloned() {
+            if sdef.fields.first().map(|(n, _)| n.parse::<usize>().is_ok()).unwrap_or(false) {
+                let fields: std::collections::HashMap<String, Value> = sdef.fields.iter()
+                    .enumerate()
+                    .map(|(i, (_, _))| (i.to_string(), args.get(i).cloned().unwrap_or(Value::Unit)))
+                    .collect();
+                return Ok(Value::Struct { type_name: name.to_string(), fields });
+            }
+        }
+
         // Built-in free functions
         crate::stdlib::call_builtin(name, args, self)
             .ok_or_else(|| err(format!("undefined function: {}", name)))
