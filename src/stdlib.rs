@@ -285,6 +285,11 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
             Some(Ok(Value::Option_(char::from_u32(n).map(|c| Box::new(Value::Char(c))))))
         }
 
+        // Default::default() — primitive defaults; user types resolved at call site via type annotation
+        "Default::default" => {
+            Some(Ok(Value::Unit)) // Unit signals "call default()" which coerce_by_ty/let resolves
+        }
+
         // Numeric type conversions: i64::from(x), f64::from(x), etc.
         "i64::from" | "i32::from" | "i16::from" | "i8::from" | "u64::from" | "u32::from" | "u16::from" | "u8::from" | "usize::from" | "isize::from" => {
             let v = args.into_iter().next().unwrap_or(Value::Int(0));

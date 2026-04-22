@@ -354,6 +354,30 @@ impl Interpreter {
                 } else {
                     Value::Unit
                 };
+                // If value is Unit and type annotation names a user type, try calling its default()
+                let val = if matches!(val, Value::Unit) {
+                    if let Some(Ty::Named(type_name)) = ty.as_ref() {
+                        let t = type_name.as_str();
+                        match t {
+                            "i64" | "i32" | "i16" | "i8" | "u64" | "u32" | "u16" | "u8" | "usize" | "isize" => Value::Int(0),
+                            "f64" | "f32" => Value::Float(0.0),
+                            "bool" => Value::Bool(false),
+                            "String" => Value::Str(String::new()),
+                            _ => {
+                                // Try calling TypeName::default()
+                                if let Ok(v) = self.call_method_or_static(t, "default", None, vec![], Rc::clone(&env)) {
+                                    v
+                                } else {
+                                    Value::Unit
+                                }
+                            }
+                        }
+                    } else {
+                        val
+                    }
+                } else {
+                    val
+                };
                 // Coerce between Vec and HashMap based on type annotation
                 let val = coerce_by_ty(val, ty.as_ref());
                 env.borrow_mut().define(name, val);
