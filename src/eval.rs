@@ -821,12 +821,25 @@ impl Interpreter {
             }
 
             Expr::StructLit { name, fields } => {
+                let mut base_fields = HashMap::new();
                 let mut field_vals = HashMap::new();
                 for (fname, fexpr) in fields {
-                    let v = self.eval_expr(fexpr, Rc::clone(&env))?;
-                    field_vals.insert(fname.clone(), v);
+                    if fname == "__rest__" {
+                        // struct update syntax: evaluate base, inherit its fields
+                        let base = self.eval_expr(fexpr, Rc::clone(&env))?;
+                        if let Value::Struct { fields, .. } = base {
+                            base_fields = fields;
+                        }
+                    } else {
+                        let v = self.eval_expr(fexpr, Rc::clone(&env))?;
+                        field_vals.insert(fname.clone(), v);
+                    }
                 }
-                Ok(Value::Struct { type_name: name.clone(), fields: field_vals })
+                // Explicit fields override base fields
+                let merged: HashMap<String, Value> = base_fields.into_iter()
+                    .chain(field_vals)
+                    .collect();
+                Ok(Value::Struct { type_name: name.clone(), fields: merged })
             }
 
             Expr::Array(elems) => {

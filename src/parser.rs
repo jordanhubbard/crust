@@ -1229,8 +1229,9 @@ impl Parser {
         let mut fields = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
             if self.eat(&TokenKind::DotDot) {
-                // struct update syntax: ..other
-                let _base = self.parse_expr(0)?;
+                // struct update syntax: ..other — encode as __rest__ field
+                let base = self.parse_expr(0)?;
+                fields.push(("__rest__".to_string(), base));
                 break;
             }
             let fname = self.expect_ident()?;
