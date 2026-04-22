@@ -315,14 +315,22 @@ impl Lexer {
                         // '\n' style char literal
                         TokenKind::Char(self.read_char_lit()?)
                     } else {
-                        // lifetime: 'a, 'static, etc. — skip, emit nothing useful
-                        // consume the lifetime name so it doesn't pollute the stream
+                        // lifetime or loop label: 'a, 'static, 'outer: for ...
+                        // consume the lifetime name
                         if next.map_or(false, |c| c.is_alphabetic() || c == '_') {
                             while self.peek().map_or(false, |c| c.is_alphanumeric() || c == '_') {
                                 self.advance();
                             }
+                            // If followed by ':', it's a loop label — skip the ':' too
+                            self.skip_whitespace();
+                            if self.peek() == Some(':') {
+                                // but not '::' (path separator)
+                                if self.peek2() != Some(':') {
+                                    self.advance(); // consume the ':'
+                                }
+                            }
                         }
-                        continue; // skip lifetime tokens entirely
+                        continue; // skip lifetime/label tokens entirely
                     }
                 }
 
