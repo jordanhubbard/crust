@@ -583,29 +583,6 @@ pub fn call_method(
                 Some(Ok(acc))
             } else { None }
         }
-        (Value::Vec(_), "scan") => {
-            if let Value::Vec(v) = recv {
-                let mut arg_iter = args.into_iter();
-                let mut acc = arg_iter.next().unwrap_or(Value::Int(0));
-                let func = arg_iter.next().unwrap_or(Value::Unit);
-                let mut output = Vec::new();
-                for item in v {
-                    let result = match &func {
-                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![acc.clone(), item], None) {
-                            Ok(v) => v,
-                            Err(e) => return Some(Err(e)),
-                        },
-                        _ => break,
-                    };
-                    match result {
-                        Value::Option_(Some(inner)) => { acc = *inner.clone(); output.push(*inner); }
-                        Value::Option_(None) => break,
-                        other => { acc = other.clone(); output.push(other); }
-                    }
-                }
-                Some(Ok(Value::Vec(output)))
-            } else { None }
-        }
         (Value::Vec(_), "enumerate") => {
             if let Value::Vec(v) = recv {
                 let pairs: Vec<Value> = v.into_iter().enumerate()
@@ -2263,6 +2240,21 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                             _ => s,
                         };
                         result.push_str(&formatted);
+                    } else if fmt_spec.contains('.') && !fmt_spec.starts_with('.') {
+                        // width.precision: {:10.3} or {:10.3} — parse both
+                        let dot = fmt_spec.find('.').unwrap();
+                        let width: usize = fmt_spec[..dot].parse().unwrap_or(0);
+                        let prec: usize = fmt_spec[dot+1..].parse().unwrap_or(6);
+                        let s = match val {
+                            Value::Float(f) => format!("{:.prec$}", f, prec = prec),
+                            Value::Int(n) => format!("{:.prec$}", *n as f64, prec = prec),
+                            other => other.to_string(),
+                        };
+                        if width > s.len() {
+                            result.push_str(&format!("{:>width$}", s, width = width));
+                        } else {
+                            result.push_str(&s);
+                        }
                     } else if fmt_spec.starts_with('.') {
                         // precision: {:.2} or {:.3}
                         let prec: usize = fmt_spec[1..].parse().unwrap_or(6);
@@ -2278,20 +2270,23 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                             other => result.push_str(&other.to_string()),
                         }
                     } else if fmt_spec.ends_with('b') || fmt_spec.ends_with('x') || fmt_spec.ends_with('X') || fmt_spec.ends_with('o') {
-                        // Possibly zero-padded: {:08b}, {:04x}, {:o}
+                        // Possibly zero-padded with # prefix: {:08b}, {:04x}, {:#x}
                         let suffix = fmt_spec.chars().last().unwrap();
-                        let rest = &fmt_spec[..fmt_spec.len()-1];
+                        let mut rest = &fmt_spec[..fmt_spec.len()-1];
+                        let has_prefix = rest.starts_with('#');
+                        if has_prefix { rest = &rest[1..]; }
                         let (zero_pad, width) = if rest.starts_with('0') {
                             (true, rest[1..].parse::<usize>().unwrap_or(0))
                         } else {
                             (false, rest.parse::<usize>().unwrap_or(0))
                         };
                         if let Value::Int(n) = val {
+                            let prefix = if has_prefix { match suffix { 'b' => "0b", 'x' => "0x", 'X' => "0x", 'o' => "0o", _ => "" } } else { "" };
                             let base_str = match suffix {
-                                'b' => format!("{:b}", n),
-                                'x' => format!("{:x}", n),
-                                'X' => format!("{:X}", n),
-                                'o' => format!("{:o}", n),
+                                'b' => format!("{}{:b}", prefix, n),
+                                'x' => format!("{}{:x}", prefix, n),
+                                'X' => format!("{}{:X}", prefix, n),
+                                'o' => format!("{}{:o}", prefix, n),
                                 _ => n.to_string(),
                             };
                             if width > 0 {
