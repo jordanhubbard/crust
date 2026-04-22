@@ -124,6 +124,7 @@ pub struct FnDef {
 pub enum ClosureParam {
     Simple(String),
     Tuple(Vec<String>),
+    Pat(Pat),  // arbitrary pattern: (i, (a, b)), _
 }
 
 #[derive(Debug, Clone)]

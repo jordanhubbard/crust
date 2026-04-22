@@ -784,7 +784,6 @@ impl Interpreter {
                         ClosureParam::Tuple(names) => {
                             let synth = format!("__p{}__", i);
                             fn_params.push(Param { name: synth.clone(), ty: Ty::Unit, is_self: false, mutable: false });
-                            // Generate: let (a, b, ..) = __pN__;
                             for (j, n) in names.iter().enumerate() {
                                 pre_stmts.push(Stmt::Let {
                                     name: n.clone(), mutable: true, ty: None,
@@ -794,6 +793,16 @@ impl Interpreter {
                                     )),
                                 });
                             }
+                        }
+                        ClosureParam::Pat(pat) => {
+                            let synth = format!("__p{}__", i);
+                            fn_params.push(Param { name: synth.clone(), ty: Ty::Unit, is_self: false, mutable: false });
+                            // Use LetPat to bind the whole pattern
+                            pre_stmts.push(Stmt::LetPat {
+                                pat: pat.clone(),
+                                ty: None,
+                                init: Some(Expr::Ident(synth.clone())),
+                            });
                         }
                     }
                 }

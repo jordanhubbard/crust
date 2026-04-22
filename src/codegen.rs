@@ -316,6 +316,7 @@ impl Codegen {
                 let ps: Vec<String> = params.iter().map(|p| match p {
                     ClosureParam::Simple(n) => n.clone(),
                     ClosureParam::Tuple(ns) => format!("({})", ns.join(", ")),
+                    ClosureParam::Pat(_) => "_".into(),
                 }).collect();
                 format!("|{}| {}", ps.join(", "), self.emit_expr(body))
             }

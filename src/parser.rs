@@ -1088,21 +1088,21 @@ impl Parser {
                         // strip leading refs: &, &&, mut
                         while self.eat(&TokenKind::And) || self.eat(&TokenKind::AndAnd) {}
                         self.eat(&TokenKind::Mut);
-                        if self.eat(&TokenKind::LParen) {
-                            // tuple destructuring: |(k, v)|
-                            let mut names = Vec::new();
-                            while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
-                                while self.eat(&TokenKind::And) || self.eat(&TokenKind::AndAnd) {}
-                                self.eat(&TokenKind::Mut);
-                                let n = if self.check(&TokenKind::Underscore) { self.advance(); "_".into() }
-                                        else { self.expect_ident()? };
-                                if self.eat(&TokenKind::Colon) { let _ = self.parse_ty()?; }
-                                names.push(n);
-                                if !self.eat(&TokenKind::Comma) { break; }
-                            }
-                            self.eat(&TokenKind::RParen);
+                        if self.check(&TokenKind::LParen) {
+                            // Full pattern destructuring: |(k, v)| or |(i, (a, b))|
+                            let pat = self.parse_pat_single()?;
                             if self.eat(&TokenKind::Colon) { let _ = self.parse_ty()?; }
-                            ps.push(crate::ast::ClosureParam::Tuple(names));
+                            // Check if it's a simple flat tuple (all idents) → use Tuple for compat
+                            let cp = match &pat {
+                                crate::ast::Pat::Tuple(parts) if parts.iter().all(|p| matches!(p, crate::ast::Pat::Ident(_))) => {
+                                    let names: Vec<String> = parts.iter().map(|p| {
+                                        if let crate::ast::Pat::Ident(n) = p { n.clone() } else { "_".into() }
+                                    }).collect();
+                                    crate::ast::ClosureParam::Tuple(names)
+                                }
+                                other => crate::ast::ClosureParam::Pat(other.clone()),
+                            };
+                            ps.push(cp);
                         } else {
                             let name = if self.check(&TokenKind::Underscore) { self.advance(); "_".into() }
                                        else { self.expect_ident()? };
