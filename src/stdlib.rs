@@ -1957,10 +1957,16 @@ pub fn call_method(
                 Some(Ok(Value::Vec(keys)))
             } else { None }
         }
-        (Value::HashMap(_), "values") => {
+        (Value::HashMap(_), "values" | "into_values") => {
             if let Value::HashMap(m) = recv {
                 let vals: Vec<Value> = m.values().cloned().collect();
                 Some(Ok(Value::Vec(vals)))
+            } else { None }
+        }
+        (Value::HashMap(_), "into_keys") => {
+            if let Value::HashMap(m) = recv {
+                let keys: Vec<Value> = m.into_keys().map(Value::Str).collect();
+                Some(Ok(Value::Vec(keys)))
             } else { None }
         }
         (Value::HashMap(_), "remove") => {

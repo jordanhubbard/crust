@@ -654,6 +654,28 @@ impl Interpreter {
                             }
                         }
                     }
+                    // For mutating methods on indexed elements (e.g. vecs[i].sort()),
+                    // apply mutation and write the updated element back into the Vec
+                    if let Expr::Index(vec_expr, idx_expr) = receiver.as_ref() {
+                        let vec_ident = match vec_expr.as_ref() { Expr::Ident(n) => Some(n.clone()), _ => None };
+                        if let Some(vec_var) = vec_ident {
+                            if let Some((ret_val, new_elem)) = crate::stdlib::call_method_mut(
+                                recv_val.clone(), method, arg_vals.clone(), self
+                            ) {
+                                let ret_val = ret_val?;
+                                let idx_val = self.eval_expr(idx_expr, Rc::clone(&env))?;
+                                let vec_opt = env.borrow().get(&vec_var);
+                                if let Some(Value::Vec(mut v)) = vec_opt {
+                                    if let Value::Int(i) = idx_val {
+                                        let i = i as usize;
+                                        if i < v.len() { v[i] = new_elem; }
+                                        env.borrow_mut().set(&vec_var, Value::Vec(v));
+                                    }
+                                }
+                                return Ok(ret_val);
+                            }
+                        }
+                    }
                 }
 
                 let recv_ident_clone = recv_ident.clone();
