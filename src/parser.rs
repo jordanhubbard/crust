@@ -504,6 +504,10 @@ impl Parser {
                 let _ = self.parse_ty()?;  // consume the trait type
                 Ok(Ty::Named("impl".to_string()))
             }
+            TokenKind::Underscore => {
+                self.advance();
+                Ok(Ty::Named("_".to_string()))
+            }
             other => Err(CrustError::parse(format!("expected type, got {:?}", other), self.line())),
         }
     }

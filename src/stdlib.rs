@@ -583,6 +583,29 @@ pub fn call_method(
                 Some(Ok(acc))
             } else { None }
         }
+        (Value::Vec(_), "scan") => {
+            if let Value::Vec(v) = recv {
+                let mut arg_iter = args.into_iter();
+                let mut acc = arg_iter.next().unwrap_or(Value::Int(0));
+                let func = arg_iter.next().unwrap_or(Value::Unit);
+                let mut output = Vec::new();
+                for item in v {
+                    let result = match &func {
+                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![acc.clone(), item], None) {
+                            Ok(v) => v,
+                            Err(e) => return Some(Err(e)),
+                        },
+                        _ => break,
+                    };
+                    match result {
+                        Value::Option_(Some(inner)) => { acc = *inner.clone(); output.push(*inner); }
+                        Value::Option_(None) => break,
+                        other => { acc = other.clone(); output.push(other); }
+                    }
+                }
+                Some(Ok(Value::Vec(output)))
+            } else { None }
+        }
         (Value::Vec(_), "enumerate") => {
             if let Value::Vec(v) = recv {
                 let pairs: Vec<Value> = v.into_iter().enumerate()
@@ -592,8 +615,23 @@ pub fn call_method(
             } else { None }
         }
         (Value::Vec(_), "collect") => {
-            // If all elements are 2-tuples, collect into a HashMap
             if let Value::Vec(ref v) = recv {
+                // collect::<Result<Vec<T>, E>>() — first Err short-circuits
+                let all_result = !v.is_empty() && v.iter().all(|x| matches!(x, Value::Result_(_)));
+                if all_result {
+                    if let Value::Vec(v) = recv {
+                        let mut items = Vec::new();
+                        for item in v {
+                            match item {
+                                Value::Result_(Err(e)) => return Some(Ok(Value::Result_(Err(e)))),
+                                Value::Result_(Ok(inner)) => items.push(*inner),
+                                other => items.push(other),
+                            }
+                        }
+                        return Some(Ok(Value::Result_(Ok(Box::new(Value::Vec(items))))));
+                    }
+                }
+                // collect::<HashMap<K,V>>() — Vec of 2-tuples → HashMap
                 if !v.is_empty() && v.iter().all(|x| matches!(x, Value::Tuple(t) if t.len() == 2)) {
                     let mut m = std::collections::HashMap::new();
                     if let Value::Vec(v) = recv {
@@ -840,7 +878,7 @@ pub fn call_method(
             if let Value::Vec(mut v) = recv { v.reverse(); Some(Ok(Value::Vec(v))) } else { None }
         }
         (Value::Vec(_), "peekable") => Some(Ok(recv)),
-        (Value::Vec(_), "cloned" | "copied") => Some(Ok(recv)),
+        (Value::Vec(_), "cloned" | "copied" | "to_vec" | "to_owned") => Some(Ok(recv)),
         (Value::Vec(_), "by_ref") => Some(Ok(recv)),
         (Value::Vec(_), "cycle") => Some(Ok(recv)), // simplified: returns self (not infinite)
         (Value::Vec(_), "step_by") => {
@@ -1998,6 +2036,25 @@ pub fn call_method(
                 }
             }
             Some(Ok(acc))
+        }
+        (Value::Range(start, end, inclusive), "scan") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end = if inc { e + 1 } else { e };
+            let mut it = args.into_iter();
+            let mut acc = it.next().unwrap_or(Value::Int(0));
+            let func = it.next().unwrap_or(Value::Unit);
+            let mut output = Vec::new();
+            if let Value::Fn(cfn) = func {
+                for n in s..end {
+                    match interp.call_crust_fn(&cfn, vec![acc.clone(), Value::Int(n)], None) {
+                        Ok(Value::Option_(Some(inner))) => { acc = *inner.clone(); output.push(*inner); }
+                        Ok(Value::Option_(None)) => break,
+                        Ok(other) => { acc = other.clone(); output.push(other); }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+            }
+            Some(Ok(Value::Vec(output)))
         }
         (Value::Range(start, end, inclusive), "enumerate") => {
             let (s, e, inc) = (*start, *end, *inclusive);
