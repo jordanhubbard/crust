@@ -2455,9 +2455,11 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                         };
                         result.push_str(&s);
                     } else if fmt_spec.contains('.') && !fmt_spec.starts_with('.') {
-                        // width.precision: {:10.3} or {:10.3} — parse both
+                        // width.precision: {:10.3} or {:010.3} — parse both
+                        let zero_pad = fmt_spec.starts_with('0');
+                        let start = if zero_pad { 1 } else { 0 };
                         let dot = fmt_spec.find('.').unwrap();
-                        let width: usize = fmt_spec[..dot].parse().unwrap_or(0);
+                        let width: usize = fmt_spec[start..dot].parse().unwrap_or(0);
                         let prec: usize = fmt_spec[dot+1..].parse().unwrap_or(6);
                         let s = match val {
                             Value::Float(f) => format!("{:.prec$}", f, prec = prec),
@@ -2465,7 +2467,11 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                             other => other.to_string(),
                         };
                         if width > s.len() {
-                            result.push_str(&format!("{:>width$}", s, width = width));
+                            if zero_pad {
+                                result.push_str(&format!("{:0>width$}", s, width = width));
+                            } else {
+                                result.push_str(&format!("{:>width$}", s, width = width));
+                            }
                         } else {
                             result.push_str(&s);
                         }
@@ -2514,9 +2520,18 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                             }
                         } else { result.push_str(&val.to_string()); }
                     } else if fmt_spec.starts_with('0') {
-                        // zero-padded decimal: {:05}
+                        // zero-padded decimal: {:05} or {:010.3}
                         let rest = &fmt_spec[1..];
-                        if let Ok(w) = rest.parse::<usize>() {
+                        if let Some(dot) = rest.find('.') {
+                            let w: usize = rest[..dot].parse().unwrap_or(0);
+                            let prec: usize = rest[dot+1..].parse().unwrap_or(6);
+                            let s = match val {
+                                Value::Float(f) => format!("{:.prec$}", f, prec = prec),
+                                Value::Int(n) => format!("{:.prec$}", *n as f64, prec = prec),
+                                other => other.to_string(),
+                            };
+                            result.push_str(&format!("{:0>width$}", s, width = w));
+                        } else if let Ok(w) = rest.parse::<usize>() {
                             match val {
                                 Value::Int(n) => result.push_str(&format!("{:0>width$}", n, width = w)),
                                 other => result.push_str(&format!("{:0>width$}", other.to_string(), width = w)),
@@ -2524,12 +2539,20 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                         } else {
                             result.push_str(&val.to_string());
                         }
-                    } else if fmt_spec == "e" || fmt_spec == "E" {
+                    } else if fmt_spec == "e" {
                         if let Value::Float(f) = val { result.push_str(&format!("{:e}", f)); }
                         else { result.push_str(&val.to_string()); }
+                    } else if fmt_spec == "E" {
+                        if let Value::Float(f) = val { result.push_str(&format!("{:E}", f)); }
+                        else { result.push_str(&val.to_string()); }
                     } else if let Ok(width) = fmt_spec.parse::<usize>() {
+                        // Width-only: right-align numbers, left-align strings
                         let s = val.to_string();
-                        result.push_str(&format!("{:width$}", s, width = width));
+                        match val {
+                            Value::Int(_) | Value::Float(_) =>
+                                result.push_str(&format!("{:>width$}", s, width = width)),
+                            _ => result.push_str(&format!("{:width$}", s, width = width)),
+                        }
                     } else {
                         result.push_str(&val.to_string());
                     }
