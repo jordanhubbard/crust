@@ -64,6 +64,43 @@ fn bind_pat(pat: &Pat, val: Value, env: &Rc<RefCell<Env>>) {
     }
 }
 
+// Coerce a value to match a declared type annotation (Vec↔HashMap conversions only)
+fn coerce_by_ty(val: Value, ty: Option<&Ty>) -> Value {
+    match ty {
+        Some(Ty::Generic(name, _)) if name == "Vec" => {
+            // Vec annotation: if we got a HashMap, convert to Vec<(k, v)>
+            if let Value::HashMap(m) = val {
+                let mut pairs: Vec<Value> = m.into_iter()
+                    .map(|(k, v)| Value::Tuple(vec![Value::Str(k), v]))
+                    .collect();
+                pairs.sort_by_key(|p| if let Value::Tuple(t) = p { t[0].to_string() } else { String::new() });
+                return Value::Vec(pairs);
+            }
+            val
+        }
+        Some(Ty::Generic(name, _)) if name == "HashMap" => {
+            // HashMap annotation: if we got a Vec of 2-tuples, convert to HashMap
+            if let Value::Vec(ref v) = val {
+                if !v.is_empty() && v.iter().all(|x| matches!(x, Value::Tuple(t) if t.len() == 2)) {
+                    if let Value::Vec(v) = val {
+                        let mut m = std::collections::HashMap::new();
+                        for item in v {
+                            if let Value::Tuple(mut t) = item {
+                                let v2 = t.pop().unwrap();
+                                let k = t.pop().unwrap().to_string();
+                                m.insert(k, v2);
+                            }
+                        }
+                        return Value::HashMap(m);
+                    }
+                }
+            }
+            val
+        }
+        _ => val,
+    }
+}
+
 // ── EntryRef helpers ──────────────────────────────────────────────────────────
 // map_name is either a plain env var name, or "__sf__::struct_var::field_name"
 // for HashMap values stored inside struct fields.
@@ -273,12 +310,14 @@ impl Interpreter {
 
     fn eval_stmt(&mut self, stmt: &Stmt, env: Rc<RefCell<Env>>) -> EvalResult {
         match stmt {
-            Stmt::Let { name, init, .. } => {
+            Stmt::Let { name, ty, init, .. } => {
                 let val = if let Some(expr) = init {
                     self.eval_expr(expr, Rc::clone(&env))?
                 } else {
                     Value::Unit
                 };
+                // Coerce between Vec and HashMap based on type annotation
+                let val = coerce_by_ty(val, ty.as_ref());
                 env.borrow_mut().define(name, val);
                 Ok(Value::Unit)
             }

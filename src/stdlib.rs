@@ -591,7 +591,25 @@ pub fn call_method(
                 Some(Ok(Value::Vec(pairs)))
             } else { None }
         }
-        (Value::Vec(_), "collect") => Some(Ok(recv)),
+        (Value::Vec(_), "collect") => {
+            // If all elements are 2-tuples, collect into a HashMap
+            if let Value::Vec(ref v) = recv {
+                if !v.is_empty() && v.iter().all(|x| matches!(x, Value::Tuple(t) if t.len() == 2)) {
+                    let mut m = std::collections::HashMap::new();
+                    if let Value::Vec(v) = recv {
+                        for item in v {
+                            if let Value::Tuple(mut t) = item {
+                                let val = t.pop().unwrap();
+                                let key = t.pop().unwrap().to_string();
+                                m.insert(key, val);
+                            }
+                        }
+                    }
+                    return Some(Ok(Value::HashMap(m)));
+                }
+            }
+            Some(Ok(recv))
+        }
         (Value::Vec(_), "collect_string") => {
             // collect::<String>() — join chars/strings into a String
             if let Value::Vec(v) = recv {
@@ -1362,6 +1380,30 @@ pub fn call_method(
                     std::cmp::Ordering::Greater => Value::Int(1),
                 };
                 Some(Ok(v))
+            } else { None }
+        }
+        // Ordering::then / then_with — self if non-zero (non-Equal), else other
+        (Value::Int(_), "then") => {
+            if let Value::Int(n) = recv {
+                if n != 0 {
+                    Some(Ok(Value::Int(n)))
+                } else {
+                    Some(Ok(args.into_iter().next().unwrap_or(Value::Int(0))))
+                }
+            } else { None }
+        }
+        (Value::Int(_), "then_with") => {
+            if let Value::Int(n) = recv {
+                if n != 0 {
+                    Some(Ok(Value::Int(n)))
+                } else {
+                    let func = args.into_iter().next().unwrap_or(Value::Unit);
+                    if let Value::Fn(cfn) = func {
+                        Some(interp.call_crust_fn(&cfn, vec![], None))
+                    } else {
+                        Some(Ok(func))
+                    }
+                }
             } else { None }
         }
         (Value::Int(_), "partial_cmp") => {

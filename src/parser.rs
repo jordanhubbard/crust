@@ -1314,6 +1314,12 @@ impl Parser {
                     }
                     self.expect(&TokenKind::RParen)?;
                     Ok(Pat::TupleStruct { name: full_name, fields: pats })
+                } else if self.eat(&TokenKind::DotDotEq) {
+                    // path range: i64::MIN..=-1, 'a'..='z'
+                    let start_lit = path_to_lit(&full_name)
+                        .ok_or_else(|| CrustError::parse(format!("unknown constant in range: {}", full_name), self.line()))?;
+                    let end_lit = self.parse_range_end_lit()?;
+                    Ok(Pat::Range(start_lit, end_lit, true))
                 } else {
                     Ok(Pat::Ident(full_name))
                 }
@@ -1322,29 +1328,33 @@ impl Parser {
         }
     }
 
-    fn maybe_range_pat(&mut self, start: Lit) -> Result<Pat> {
-        let inclusive = if self.eat(&TokenKind::DotDotEq) {
-            true
-        } else if self.check(&TokenKind::DotDot) {
-            // don't consume bare `..` — it might be something else
-            false
-        } else {
-            return Ok(Pat::Lit(start));
-        };
-        if !inclusive { return Ok(Pat::Lit(start)); }
-        // parse end literal
-        let end = match self.peek().clone() {
-            TokenKind::Int(n)  => { self.advance(); Lit::Int(n) }
-            TokenKind::Char(c) => { self.advance(); Lit::Char(c) }
+    fn parse_range_end_lit(&mut self) -> Result<Lit> {
+        match self.peek().clone() {
+            TokenKind::Int(n)  => { self.advance(); Ok(Lit::Int(n)) }
+            TokenKind::Char(c) => { self.advance(); Ok(Lit::Char(c)) }
             TokenKind::Minus   => {
                 self.advance();
                 match self.peek().clone() {
-                    TokenKind::Int(n) => { self.advance(); Lit::Int(-n) }
-                    _ => return Err(CrustError::parse("expected literal in range pattern", self.line())),
+                    TokenKind::Int(n) => { self.advance(); Ok(Lit::Int(-n)) }
+                    _ => Err(CrustError::parse("expected literal in range pattern", self.line())),
                 }
             }
-            _ => return Err(CrustError::parse("expected literal in range pattern", self.line())),
-        };
+            TokenKind::Ident(name) => {
+                self.advance();
+                let mut path = vec![name];
+                while self.eat(&TokenKind::ColonColon) {
+                    if let TokenKind::Ident(s) = self.peek().clone() { self.advance(); path.push(s); } else { break; }
+                }
+                let full = path.join("::");
+                path_to_lit(&full).ok_or_else(|| CrustError::parse(format!("unknown constant in range: {}", full), self.line()))
+            }
+            _ => Err(CrustError::parse("expected literal in range pattern", self.line())),
+        }
+    }
+
+    fn maybe_range_pat(&mut self, start: Lit) -> Result<Pat> {
+        if !self.eat(&TokenKind::DotDotEq) { return Ok(Pat::Lit(start)); }
+        let end = self.parse_range_end_lit()?;
         Ok(Pat::Range(start, end, true))
     }
 
@@ -1356,6 +1366,27 @@ impl Parser {
             if !self.eat(&TokenKind::Comma) { break; }
         }
         Ok(args)
+    }
+}
+
+fn path_to_lit(path: &str) -> Option<Lit> {
+    match path {
+        "i8::MIN" | "std::i8::MIN" => Some(Lit::Int(i8::MIN as i64)),
+        "i8::MAX" | "std::i8::MAX" => Some(Lit::Int(i8::MAX as i64)),
+        "i16::MIN" | "std::i16::MIN" => Some(Lit::Int(i16::MIN as i64)),
+        "i16::MAX" | "std::i16::MAX" => Some(Lit::Int(i16::MAX as i64)),
+        "i32::MIN" | "std::i32::MIN" => Some(Lit::Int(i32::MIN as i64)),
+        "i32::MAX" | "std::i32::MAX" => Some(Lit::Int(i32::MAX as i64)),
+        "i64::MIN" | "std::i64::MIN" => Some(Lit::Int(i64::MIN)),
+        "i64::MAX" | "std::i64::MAX" => Some(Lit::Int(i64::MAX)),
+        "u8::MIN" | "std::u8::MIN" => Some(Lit::Int(u8::MIN as i64)),
+        "u8::MAX" | "std::u8::MAX" => Some(Lit::Int(u8::MAX as i64)),
+        "u16::MIN" => Some(Lit::Int(u16::MIN as i64)),
+        "u16::MAX" => Some(Lit::Int(u16::MAX as i64)),
+        "u32::MIN" => Some(Lit::Int(u32::MIN as i64)),
+        "u32::MAX" => Some(Lit::Int(u32::MAX as i64)),
+        "usize::MAX" | "u64::MAX" => Some(Lit::Int(i64::MAX)),
+        _ => None,
     }
 }
 
