@@ -270,8 +270,10 @@ impl Parser {
         self.skip_generics();
         // impl [Trait for] Type
         let first = self.expect_ident()?;
+        self.skip_generics(); // skip <T> after type name
         let (type_name, trait_name) = if self.eat(&TokenKind::For) {
             let ty = self.expect_ident()?;
+            self.skip_generics(); // skip <T> after implementing type name
             (ty, Some(first))
         } else {
             (first, None)
