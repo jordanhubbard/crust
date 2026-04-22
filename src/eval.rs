@@ -576,6 +576,20 @@ impl Interpreter {
                         v.get(idx).cloned()
                             .ok_or_else(|| err(format!("tuple index {} out of bounds", i)))
                     }
+                    (Value::Vec(v), Value::Range(lo, hi, inc)) => {
+                        let lo = lo.max(0) as usize;
+                        let hi = if hi == i64::MAX { v.len() }
+                                 else if inc { (hi + 1).min(v.len() as i64) as usize }
+                                 else { hi.min(v.len() as i64) as usize };
+                        Ok(Value::Vec(v[lo.min(v.len())..hi].to_vec()))
+                    }
+                    (Value::Str(s), Value::Range(lo, hi, inc)) => {
+                        let lo = lo.max(0) as usize;
+                        let hi = if hi == i64::MAX { s.len() }
+                                 else if inc { (hi + 1).min(s.len() as i64) as usize }
+                                 else { hi.min(s.len() as i64) as usize };
+                        Ok(Value::Str(s[lo.min(s.len())..hi].to_string()))
+                    }
                     (b, i) => Err(err(format!("cannot index {} with {}", b.type_name(), i.type_name()))),
                 }
             }
@@ -1029,6 +1043,11 @@ impl Interpreter {
                 let lo_n = match eval_lit(lo) { Value::Int(n) => n, _ => return false };
                 let hi_n = match eval_lit(hi) { Value::Int(n) => n, _ => return false };
                 *n >= lo_n && if *inc { *n <= hi_n } else { *n < hi_n }
+            }
+            (Pat::Range(lo, hi, inc), Value::Char(c)) => {
+                let lo_c = match eval_lit(lo) { Value::Char(c) => c, _ => return false };
+                let hi_c = match eval_lit(hi) { Value::Char(c) => c, _ => return false };
+                *c >= lo_c && if *inc { *c <= hi_c } else { *c < hi_c }
             }
             _ => false,
         }

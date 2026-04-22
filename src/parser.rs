@@ -115,6 +115,21 @@ impl Parser {
     }
 
     fn parse_item(&mut self) -> Result<Item> {
+        // skip outer attributes: #[...]
+        while self.check(&TokenKind::Hash) {
+            self.advance();
+            if self.eat(&TokenKind::LBracket) {
+                let mut depth = 1usize;
+                while depth > 0 {
+                    match self.peek() {
+                        TokenKind::LBracket => { self.advance(); depth += 1; }
+                        TokenKind::RBracket => { self.advance(); depth -= 1; }
+                        TokenKind::Eof => break,
+                        _ => { self.advance(); }
+                    }
+                }
+            }
+        }
         // skip visibility
         self.eat(&TokenKind::Pub);
         match self.peek().clone() {
@@ -1136,16 +1151,18 @@ impl Parser {
                     // `{ field: expr }` — definitely a struct literal
                     TokenKind::Colon => true,
                     // `{ field, ... }` — struct shorthand only if next field also ends in `:` or `,`
-                    // Don't match `{ field }` alone (ambiguous with block expression)
                     TokenKind::Comma => {
                         // Scan ahead: if any field has `:` it's a struct lit
+                        // Also, if every non-comma token is an Ident (all shorthand), treat as struct lit
                         let mut j = i + 1;
+                        let mut all_ident = true;
                         while j < len {
                             match &self.tokens[j].kind {
                                 TokenKind::Colon => return true,
-                                TokenKind::RBrace => return false,
+                                TokenKind::RBrace => return all_ident,
                                 TokenKind::Eof => return false,
-                                _ => j += 1,
+                                TokenKind::Ident(_) | TokenKind::Comma => { j += 1; }
+                                _ => { all_ident = false; j += 1; }
                             }
                         }
                         false
@@ -1202,16 +1219,16 @@ impl Parser {
         match self.peek().clone() {
             TokenKind::Underscore => { self.advance(); Ok(Pat::Wild) }
             TokenKind::DotDot => { self.advance(); Ok(Pat::Wild) }
-            TokenKind::Int(n)   => { self.advance(); Ok(Pat::Lit(Lit::Int(n))) }
+            TokenKind::Int(n)   => { self.advance(); self.maybe_range_pat(Lit::Int(n)) }
             TokenKind::Float(f) => { self.advance(); Ok(Pat::Lit(Lit::Float(f))) }
             TokenKind::True     => { self.advance(); Ok(Pat::Lit(Lit::Bool(true))) }
             TokenKind::False    => { self.advance(); Ok(Pat::Lit(Lit::Bool(false))) }
             TokenKind::Str(s)   => { self.advance(); Ok(Pat::Lit(Lit::Str(s))) }
-            TokenKind::Char(c)  => { self.advance(); Ok(Pat::Lit(Lit::Char(c))) }
+            TokenKind::Char(c)  => { self.advance(); self.maybe_range_pat(Lit::Char(c)) }
             TokenKind::Minus => {
                 self.advance();
                 match self.peek().clone() {
-                    TokenKind::Int(n)   => { self.advance(); Ok(Pat::Lit(Lit::Int(-n))) }
+                    TokenKind::Int(n)   => { self.advance(); self.maybe_range_pat(Lit::Int(-n)) }
                     TokenKind::Float(f) => { self.advance(); Ok(Pat::Lit(Lit::Float(-f))) }
                     _ => Err(CrustError::parse("expected literal after - in pattern", self.line())),
                 }
@@ -1283,6 +1300,32 @@ impl Parser {
             }
             other => Err(CrustError::parse(format!("expected pattern, got {:?}", other), self.line())),
         }
+    }
+
+    fn maybe_range_pat(&mut self, start: Lit) -> Result<Pat> {
+        let inclusive = if self.eat(&TokenKind::DotDotEq) {
+            true
+        } else if self.check(&TokenKind::DotDot) {
+            // don't consume bare `..` — it might be something else
+            false
+        } else {
+            return Ok(Pat::Lit(start));
+        };
+        if !inclusive { return Ok(Pat::Lit(start)); }
+        // parse end literal
+        let end = match self.peek().clone() {
+            TokenKind::Int(n)  => { self.advance(); Lit::Int(n) }
+            TokenKind::Char(c) => { self.advance(); Lit::Char(c) }
+            TokenKind::Minus   => {
+                self.advance();
+                match self.peek().clone() {
+                    TokenKind::Int(n) => { self.advance(); Lit::Int(-n) }
+                    _ => return Err(CrustError::parse("expected literal in range pattern", self.line())),
+                }
+            }
+            _ => return Err(CrustError::parse("expected literal in range pattern", self.line())),
+        };
+        Ok(Pat::Range(start, end, true))
     }
 
     // Parse macro args: format strings get first arg as raw string, rest as exprs

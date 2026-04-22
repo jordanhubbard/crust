@@ -34,7 +34,7 @@ pub fn call_method_mut(
             let result = v.pop();
             Some((Ok(Value::Option_(result.map(Box::new))), Value::Vec(v)))
         }
-        (Value::Vec(mut v), "pop_front") => {
+        (Value::Vec(mut v), "pop_front" | "next") => {
             let result = if v.is_empty() { None } else { Some(v.remove(0)) };
             Some((Ok(Value::Option_(result.map(Box::new))), Value::Vec(v)))
         }
@@ -443,9 +443,15 @@ pub fn call_method(
                 } else { Some(Ok(Value::Bool(true))) }
             } else { None }
         }
-        (Value::Vec(_), "first" | "next") => {
+        (Value::Vec(_), "first") => {
             if let Value::Vec(v) = recv {
                 Some(Ok(Value::Option_(v.into_iter().next().map(Box::new))))
+            } else { None }
+        }
+        (Value::Vec(_), "peek") => {
+            // peekable iterator: return Option(first) without consuming
+            if let Value::Vec(ref v) = recv {
+                Some(Ok(Value::Option_(v.first().cloned().map(Box::new))))
             } else { None }
         }
         (Value::Vec(_), "last") => {
