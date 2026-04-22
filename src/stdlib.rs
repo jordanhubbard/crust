@@ -40,15 +40,35 @@ pub fn call_method_mut(
         }
         (Value::Vec(mut v), "insert") => {
             let mut it = args.into_iter();
-            if let (Some(Value::Int(idx)), Some(val)) = (it.next(), it.next()) {
-                let idx = idx.max(0) as usize;
-                if idx <= v.len() { v.insert(idx, val); }
+            let first = it.next().unwrap_or(Value::Unit);
+            let second = it.next();
+            if let Some(val) = second {
+                // Vec::insert(idx, val)
+                if let Value::Int(idx) = first {
+                    let idx = idx.max(0) as usize;
+                    if idx <= v.len() { v.insert(idx, val); }
+                }
+            } else {
+                // HashSet::insert(val) — deduplicated push
+                let key = first.to_string();
+                if !v.iter().any(|x| x.to_string() == key) {
+                    v.push(first);
+                }
             }
             Some((Ok(Value::Unit), Value::Vec(v)))
         }
         (Value::Vec(mut v), "remove") => {
             let idx = match args.into_iter().next() {
                 Some(Value::Int(i)) => i as usize,
+                Some(other) => {
+                    // HashSet::remove(&val) — remove by value
+                    let key = other.to_string();
+                    if let Some(pos) = v.iter().position(|x| x.to_string() == key) {
+                        v.remove(pos);
+                        return Some((Ok(Value::Bool(true)), Value::Vec(v)));
+                    }
+                    return Some((Ok(Value::Bool(false)), Value::Vec(v)));
+                }
                 _ => return None,
             };
             if idx < v.len() {
@@ -241,9 +261,9 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
             Some(Ok(Value::Str(s)))
         }
 
-        // Vec / VecDeque constructors (VecDeque is just Vec at Level 0)
-        "Vec::new" | "VecDeque::new" => Some(Ok(Value::Vec(Vec::new()))),
-        "Vec::with_capacity" | "VecDeque::with_capacity" => Some(Ok(Value::Vec(Vec::new()))),
+        // Vec / VecDeque / HashSet constructors (all backed by Vec at Level 0)
+        "Vec::new" | "VecDeque::new" | "HashSet::new" | "BTreeSet::new" => Some(Ok(Value::Vec(Vec::new()))),
+        "Vec::with_capacity" | "VecDeque::with_capacity" | "HashSet::with_capacity" => Some(Ok(Value::Vec(Vec::new()))),
 
         // HashMap constructors
         "HashMap::new" => Some(Ok(Value::HashMap(HashMap::new()))),
@@ -353,6 +373,69 @@ pub fn call_method(
                 let needle = args.into_iter().next().unwrap_or(Value::Unit);
                 let found = v.iter().any(|x| crate::eval::values_equal(x, &needle));
                 Some(Ok(Value::Bool(found)))
+            } else { None }
+        }
+        // HashSet set operations (all backed by Vec at Level 0)
+        (Value::Vec(_), "union") => {
+            if let Value::Vec(mut a) = recv {
+                if let Some(Value::Vec(b)) = args.into_iter().next() {
+                    for item in b {
+                        let key = item.to_string();
+                        if !a.iter().any(|x| x.to_string() == key) { a.push(item); }
+                    }
+                }
+                Some(Ok(Value::Vec(a)))
+            } else { None }
+        }
+        (Value::Vec(_), "intersection") => {
+            if let Value::Vec(a) = recv {
+                if let Some(Value::Vec(b)) = args.into_iter().next() {
+                    let result: Vec<Value> = a.into_iter()
+                        .filter(|x| b.iter().any(|y| y.to_string() == x.to_string()))
+                        .collect();
+                    Some(Ok(Value::Vec(result)))
+                } else { Some(Ok(Value::Vec(vec![]))) }
+            } else { None }
+        }
+        (Value::Vec(_), "difference") => {
+            if let Value::Vec(a) = recv {
+                if let Some(Value::Vec(b)) = args.into_iter().next() {
+                    let result: Vec<Value> = a.into_iter()
+                        .filter(|x| !b.iter().any(|y| y.to_string() == x.to_string()))
+                        .collect();
+                    Some(Ok(Value::Vec(result)))
+                } else { Some(Ok(Value::Vec(a))) }
+            } else { None }
+        }
+        (Value::Vec(_), "symmetric_difference") => {
+            if let Value::Vec(a) = recv {
+                if let Some(Value::Vec(b)) = args.into_iter().next() {
+                    let mut result: Vec<Value> = a.iter()
+                        .filter(|x| !b.iter().any(|y| y.to_string() == x.to_string()))
+                        .cloned().collect();
+                    for item in &b {
+                        if !a.iter().any(|x| x.to_string() == item.to_string()) {
+                            result.push(item.clone());
+                        }
+                    }
+                    Some(Ok(Value::Vec(result)))
+                } else { Some(Ok(Value::Vec(a))) }
+            } else { None }
+        }
+        (Value::Vec(_), "is_subset") => {
+            if let Value::Vec(a) = recv {
+                if let Some(Value::Vec(b)) = args.into_iter().next() {
+                    let ok = a.iter().all(|x| b.iter().any(|y| y.to_string() == x.to_string()));
+                    Some(Ok(Value::Bool(ok)))
+                } else { Some(Ok(Value::Bool(a.is_empty()))) }
+            } else { None }
+        }
+        (Value::Vec(_), "is_superset") => {
+            if let Value::Vec(a) = recv {
+                if let Some(Value::Vec(b)) = args.into_iter().next() {
+                    let ok = b.iter().all(|x| a.iter().any(|y| y.to_string() == x.to_string()));
+                    Some(Ok(Value::Bool(ok)))
+                } else { Some(Ok(Value::Bool(true))) }
             } else { None }
         }
         (Value::Vec(_), "first" | "next") => {
@@ -569,6 +652,68 @@ pub fn call_method(
                 Some(Ok(Value::Vec(v.into_iter().skip(n).collect())))
             } else { None }
         }
+        (Value::Vec(_), "take_while") => {
+            if let Value::Vec(v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                let mut result = Vec::new();
+                for item in v {
+                    let keep = match &func {
+                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![item.clone()], None) {
+                            Ok(v) => v.is_truthy(),
+                            Err(e) => return Some(Err(e)),
+                        },
+                        _ => false,
+                    };
+                    if keep { result.push(item); } else { break; }
+                }
+                Some(Ok(Value::Vec(result)))
+            } else { None }
+        }
+        (Value::Vec(_), "skip_while") => {
+            if let Value::Vec(v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                let mut skipping = true;
+                let mut result = Vec::new();
+                for item in v {
+                    if skipping {
+                        let skip = match &func {
+                            Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![item.clone()], None) {
+                                Ok(v) => v.is_truthy(),
+                                Err(e) => return Some(Err(e)),
+                            },
+                            _ => false,
+                        };
+                        if !skip { skipping = false; result.push(item); }
+                    } else {
+                        result.push(item);
+                    }
+                }
+                Some(Ok(Value::Vec(result)))
+            } else { None }
+        }
+        (Value::Vec(_), "scan") => {
+            if let Value::Vec(v) = recv {
+                let mut it = args.into_iter();
+                let mut state = it.next().unwrap_or(Value::Int(0));
+                let func = it.next().unwrap_or(Value::Unit);
+                let mut result = Vec::new();
+                if let Value::Fn(cfn) = func {
+                    for item in v {
+                        let out = match interp.call_crust_fn(&cfn, vec![state.clone(), item], None) {
+                            Ok(v) => v,
+                            Err(e) => return Some(Err(e)),
+                        };
+                        // scan closure returns Option<B> or just B; unwrap Option
+                        match out {
+                            Value::Option_(None) => break,
+                            Value::Option_(Some(v)) => { state = *v.clone(); result.push(*v); }
+                            other => { state = other.clone(); result.push(other); }
+                        }
+                    }
+                }
+                Some(Ok(Value::Vec(result)))
+            } else { None }
+        }
         (Value::Vec(_), "any") => {
             if let Value::Vec(v) = recv {
                 let func = args.into_iter().next().unwrap_or(Value::Unit);
@@ -772,6 +917,56 @@ pub fn call_method(
                 let n = match args.into_iter().next() { Some(Value::Int(n)) => n.max(1) as usize, _ => 1 };
                 let chunks: Vec<Value> = v.chunks(n).map(|c| Value::Vec(c.to_vec())).collect();
                 Some(Ok(Value::Vec(chunks)))
+            } else { None }
+        }
+        (Value::Vec(_), "split_at") => {
+            if let Value::Vec(v) = recv {
+                let mid = match args.into_iter().next() { Some(Value::Int(n)) => (n as usize).min(v.len()), _ => 0 };
+                let (left, right) = v.split_at(mid);
+                Some(Ok(Value::Tuple(vec![Value::Vec(left.to_vec()), Value::Vec(right.to_vec())])))
+            } else { None }
+        }
+        (Value::Vec(_), "split_first") => {
+            if let Value::Vec(v) = recv {
+                if v.is_empty() { Some(Ok(Value::Option_(None))) }
+                else {
+                    let mut it = v.into_iter();
+                    let first = it.next().unwrap();
+                    Some(Ok(Value::Option_(Some(Box::new(Value::Tuple(vec![first, Value::Vec(it.collect())]))))))
+                }
+            } else { None }
+        }
+        (Value::Vec(_), "split_last") => {
+            if let Value::Vec(mut v) = recv {
+                if v.is_empty() { Some(Ok(Value::Option_(None))) }
+                else {
+                    let last = v.pop().unwrap();
+                    Some(Ok(Value::Option_(Some(Box::new(Value::Tuple(vec![last, Value::Vec(v)]))))))
+                }
+            } else { None }
+        }
+        (Value::Vec(_), "split" | "splitn") if matches!(recv, Value::Vec(_)) => {
+            // Vec::split(|predicate|) — not the same as String::split
+            if let Value::Vec(v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                let mut groups: Vec<Value> = Vec::new();
+                let mut current: Vec<Value> = Vec::new();
+                for item in v {
+                    let is_sep = match &func {
+                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![item.clone()], None) {
+                            Ok(v) => v.is_truthy(),
+                            _ => false,
+                        },
+                        _ => false,
+                    };
+                    if is_sep {
+                        groups.push(Value::Vec(std::mem::take(&mut current)));
+                    } else {
+                        current.push(item);
+                    }
+                }
+                groups.push(Value::Vec(current));
+                Some(Ok(Value::Vec(groups)))
             } else { None }
         }
 

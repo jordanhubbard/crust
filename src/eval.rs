@@ -26,6 +26,44 @@ fn err(msg: impl Into<String>) -> Signal {
     Signal::Err(CrustError::runtime(msg))
 }
 
+// ── Pattern binding ───────────────────────────────────────────────────────────
+
+fn bind_pat(pat: &Pat, val: Value, env: &Rc<RefCell<Env>>) {
+    match pat {
+        Pat::Ident(name) => env.borrow_mut().define(name, val),
+        Pat::Wild => {}
+        Pat::Tuple(pats) => {
+            if let Value::Tuple(items) = val {
+                for (p, v) in pats.iter().zip(items.into_iter()) {
+                    bind_pat(p, v, env);
+                }
+            } else if let Value::Vec(items) = val {
+                for (p, v) in pats.iter().zip(items.into_iter()) {
+                    bind_pat(p, v, env);
+                }
+            }
+        }
+        Pat::Ref(inner) => bind_pat(inner, val, env),
+        Pat::TupleStruct { fields, .. } => {
+            if let Value::Tuple(items) = val {
+                for (p, v) in fields.iter().zip(items.into_iter()) {
+                    bind_pat(p, v, env);
+                }
+            }
+        }
+        Pat::Struct { fields, .. } => {
+            if let Value::Struct { fields: sfields, .. } = val {
+                for (fname, fpat) in fields {
+                    if let Some(fval) = sfields.get(fname).cloned() {
+                        bind_pat(fpat, fval, env);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 // ── EntryRef helpers ──────────────────────────────────────────────────────────
 // map_name is either a plain env var name, or "__sf__::struct_var::field_name"
 // for HashMap values stored inside struct fields.
@@ -210,6 +248,15 @@ impl Interpreter {
                     Value::Unit
                 };
                 env.borrow_mut().define(name, val);
+                Ok(Value::Unit)
+            }
+            Stmt::LetPat { pat, init, .. } => {
+                let val = if let Some(expr) = init {
+                    self.eval_expr(expr, Rc::clone(&env))?
+                } else {
+                    Value::Unit
+                };
+                bind_pat(pat, val, &env);
                 Ok(Value::Unit)
             }
             Stmt::Semi(expr) => {

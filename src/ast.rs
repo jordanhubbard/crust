@@ -93,6 +93,7 @@ pub enum Ty {
 #[derive(Debug, Clone)]
 pub enum Stmt {
     Let { name: String, mutable: bool, ty: Option<Ty>, init: Option<Expr> },
+    LetPat { pat: Pat, ty: Option<Ty>, init: Option<Expr> },
     Semi(Expr),
     Expr(Expr),
     Item(Item),

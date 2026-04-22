@@ -5,16 +5,18 @@ use crate::lexer::{Token, TokenKind};
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    pending_gt: bool, // leftover `>` after splitting `>>`
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+        Parser { tokens, pos: 0, pending_gt: false }
     }
 
     // ── Token navigation ──────────────────────────────────────────────────────
 
     fn peek(&self) -> &TokenKind {
+        if self.pending_gt { return &TokenKind::Gt; }
         self.tokens.get(self.pos).map(|t| &t.kind).unwrap_or(&TokenKind::Eof)
     }
 
@@ -27,6 +29,10 @@ impl Parser {
     }
 
     fn advance(&mut self) -> &TokenKind {
+        if self.pending_gt {
+            self.pending_gt = false;
+            return &TokenKind::Gt;
+        }
         let k = &self.tokens[self.pos].kind;
         if self.pos + 1 < self.tokens.len() { self.pos += 1; }
         k
@@ -419,7 +425,10 @@ impl Parser {
                         args.push(self.parse_ty()?);
                         if !self.eat(&TokenKind::Comma) { break; }
                     }
-                    if !self.eat(&TokenKind::Gt) { self.eat(&TokenKind::Shr); }
+                    if !self.eat(&TokenKind::Gt) {
+                        // `>>` closes this generic, leave a pending `>` for the parent
+                        if self.eat(&TokenKind::Shr) { self.pending_gt = true; }
+                    }
                     Ok(Ty::Generic(name, args))
                 } else {
                     Ok(Ty::Named(name))
@@ -483,6 +492,14 @@ impl Parser {
     fn parse_let(&mut self) -> Result<Stmt> {
         self.advance(); // consume `let`
         let mutable = self.eat(&TokenKind::Mut);
+        // Tuple / struct destructuring pattern: let (a, b) = ...
+        if self.check(&TokenKind::LParen) {
+            let pat = self.parse_pat()?;
+            let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_ty()?) } else { None };
+            let init = if self.eat(&TokenKind::Eq) { Some(self.parse_expr(0)?) } else { None };
+            self.eat(&TokenKind::Semi);
+            return Ok(Stmt::LetPat { pat, ty, init });
+        }
         let name = match self.peek().clone() {
             TokenKind::Ident(s) => { self.advance(); s }
             TokenKind::Underscore => { self.advance(); "_".to_string() }
@@ -719,11 +736,26 @@ impl Parser {
                 let args = if close == TokenKind::RParen {
                     self.parse_macro_args()?
                 } else {
-                    // vec![a, b, c] or similar
+                    // vec![a, b, c] or vec![value; count]
                     let mut args = Vec::new();
-                    while !self.check(&close) && !self.check(&TokenKind::Eof) {
-                        args.push(self.parse_expr(0)?);
-                        if !self.eat(&TokenKind::Comma) { break; }
+                    // check for vec![val; N] repeat syntax first
+                    if !self.check(&close) {
+                        let first = self.parse_expr(0)?;
+                        if self.eat(&TokenKind::Semi) {
+                            // Encode as __vec_repeat__ macro
+                            let count = self.parse_expr(0)?;
+                            // Consume closing bracket then return early with special macro
+                            self.expect(&close)?;
+                            return Ok(Expr::Macro {
+                                name: format!("__vec_repeat__{}", name),
+                                args: vec![first, count],
+                            });
+                        }
+                        args.push(first);
+                        while self.eat(&TokenKind::Comma) {
+                            if self.check(&close) { break; }
+                            args.push(self.parse_expr(0)?);
+                        }
                     }
                     args
                 };
