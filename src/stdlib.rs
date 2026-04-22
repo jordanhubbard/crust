@@ -1239,6 +1239,12 @@ pub fn call_method(
                 Some(Ok(Value::Vec(cs)))
             } else { None }
         }
+        // chars().next() pattern: first char as Option<char>
+        (Value::Str(_), "next") => {
+            if let Value::Str(s) = recv {
+                Some(Ok(Value::Option_(s.chars().next().map(|c| Box::new(Value::Char(c))))))
+            } else { None }
+        }
         (Value::Str(_), "bytes") => {
             if let Value::Str(s) = recv {
                 let bs: Vec<Value> = s.bytes().map(|b| Value::Int(b as i64)).collect();

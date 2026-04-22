@@ -173,6 +173,8 @@ pub struct Interpreter {
     pub self_writeback: Option<Value>,
     // Populated by call_crust_fn for &mut params: (param_index, new_value)
     pub mut_writebacks: Vec<(usize, Value)>,
+    // Non-None while evaluating a Display::fmt call; write! appends here
+    pub display_buf: Option<String>,
 }
 
 impl Interpreter {
@@ -185,6 +187,7 @@ impl Interpreter {
             output: Vec::new(),
             self_writeback: None,
             mut_writebacks: Vec::new(),
+            display_buf: None,
         }
     }
 
@@ -999,7 +1002,14 @@ impl Interpreter {
                 // ignore writer arg (args[0]), format the rest
                 if args.len() < 2 { return Ok(Value::Result_(Ok(Box::new(Value::Unit)))); }
                 let text = self.eval_format_macro(&args[1..], env)?;
-                if name == "writeln" { println!("{}", text); } else { print!("{}", text); }
+                if let Some(ref mut buf) = self.display_buf {
+                    buf.push_str(&text);
+                    if name == "writeln" { buf.push('\n'); }
+                } else if name == "writeln" {
+                    println!("{}", text);
+                } else {
+                    print!("{}", text);
+                }
                 Ok(Value::Result_(Ok(Box::new(Value::Unit))))
             }
 
@@ -1017,7 +1027,53 @@ impl Interpreter {
         let rest: Vec<Value> = args[1..].iter()
             .map(|a| self.eval_expr(a, Rc::clone(&env)))
             .collect::<Result<_, _>>()?;
+        // For user types with Display impls, pre-convert on {} specs
+        let rest = self.apply_display_impls(&fmt, rest, env)?;
         crate::stdlib::format_string(&fmt, &rest).map_err(Signal::Err)
+    }
+
+    /// For `{}` (non-debug) format specs, replace user struct/enum values with
+    /// the output of their `impl Display` fmt method, if one exists.
+    fn apply_display_impls(&mut self, fmt: &str, vals: Vec<Value>, env: Rc<RefCell<Env>>) -> Result<Vec<Value>, Signal> {
+        // Collect format specs from the format string
+        let mut specs: Vec<String> = Vec::new();
+        let mut chars = fmt.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                if chars.peek() == Some(&'{') { chars.next(); continue; }
+                let mut spec = String::new();
+                for ch in &mut chars { if ch == '}' { break; } spec.push(ch); }
+                specs.push(spec);
+            }
+        }
+        let mut result = vals;
+        for (i, spec) in specs.iter().enumerate() {
+            if i >= result.len() { break; }
+            let fmt_part = if spec.contains(':') { spec.split(':').nth(1).unwrap_or("") } else { "" };
+            // Only apply Display (not debug {:?})
+            if fmt_part == "?" || fmt_part == "#?" { continue; }
+            let type_name = match &result[i] {
+                Value::Struct { type_name, .. } | Value::Enum { type_name, .. } => type_name.clone(),
+                _ => continue,
+            };
+            let has_fmt = self.impls.get(&type_name)
+                .map(|ms| ms.iter().any(|m| m.name == "fmt"))
+                .unwrap_or(false);
+            if !has_fmt { continue; }
+            let val = result[i].clone();
+            let old_buf = self.display_buf.replace(String::new());
+            let _ = self.call_method_or_static(
+                &type_name,
+                "fmt",
+                Some(val),
+                vec![Value::Unit],
+                Rc::clone(&env),
+            );
+            let s = self.display_buf.take().unwrap_or_default();
+            self.display_buf = old_buf;
+            result[i] = Value::Str(s);
+        }
+        Ok(result)
     }
 
     fn eval_for_loop(&mut self, args: &[Expr], env: Rc<RefCell<Env>>) -> EvalResult {
