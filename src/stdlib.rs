@@ -2132,12 +2132,10 @@ pub fn call_method(
             match recv {
                 Value::Result_(Ok(v)) => {
                     let func = args.into_iter().next().unwrap_or(Value::Unit);
-                    if let Value::Fn(cfn) = func {
-                        match interp.call_crust_fn(&cfn, vec![*v], None) {
-                            Ok(v) => Some(Ok(v)),
-                            Err(e) => Some(Err(e)),
-                        }
-                    } else { Some(Ok(Value::Result_(Ok(v)))) }
+                    match call_value_as_fn(&func, vec![*v], interp) {
+                        Ok(v) => Some(Ok(v)),
+                        Err(e) => Some(Err(e)),
+                    }
                 }
                 Value::Result_(Err(e)) => Some(Ok(Value::Result_(Err(e)))),
                 other => Some(Ok(other)),
@@ -2649,10 +2647,10 @@ pub fn call_method(
                     } else { Some(Ok(Value::Unit)) }
                 }
                 Value::Result_(Ok(v)) => Some(Ok(*v)),
-                Value::Result_(Err(_)) => {
+                Value::Result_(Err(e)) => {
                     let func = args.into_iter().next().unwrap_or(Value::Unit);
                     if let Value::Fn(cfn) = func {
-                        Some(interp.call_crust_fn(&cfn, vec![], None))
+                        Some(interp.call_crust_fn(&cfn, vec![*e], None))
                     } else { Some(Ok(Value::Unit)) }
                 }
                 other => Some(Ok(other)),
