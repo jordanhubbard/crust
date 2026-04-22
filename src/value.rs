@@ -161,6 +161,25 @@ impl Value {
             Value::Option_(None) => "None".to_string(),
             Value::Result_(Ok(v)) => format!("Ok({})", v.debug_repr()),
             Value::Result_(Err(e)) => format!("Err({})", e.debug_repr()),
+            Value::Enum { type_name, variant, inner } => {
+                let prefix = format!("{}::{}", type_name, variant);
+                match inner {
+                    None => prefix,
+                    Some(v) => match v.as_ref() {
+                        Value::Tuple(items) => {
+                            let parts: Vec<String> = items.iter().map(|x| x.debug_repr()).collect();
+                            format!("{}({})", prefix, parts.join(", "))
+                        }
+                        other => format!("{}({})", prefix, other.debug_repr()),
+                    }
+                }
+            }
+            Value::Struct { type_name, fields } => {
+                let mut pairs: Vec<_> = fields.iter().collect();
+                pairs.sort_by_key(|(k, _)| *k);
+                let parts: Vec<String> = pairs.iter().map(|(k, v)| format!("{}: {}", k, v.debug_repr())).collect();
+                format!("{} {{ {} }}", type_name, parts.join(", "))
+            }
             other => other.to_string(),
         }
     }
