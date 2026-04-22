@@ -1282,10 +1282,14 @@ pub fn call_method(
             } else { None }
         }
         (Value::Str(_), "parse") => {
-            // parse::<T>() — try int first, then float
+            // parse::<T>() — try bool, int, float in order
             if let Value::Str(s) = recv {
                 let s = s.trim();
-                if let Ok(n) = s.parse::<i64>() {
+                if s == "true" {
+                    Some(Ok(Value::Result_(Ok(Box::new(Value::Bool(true))))))
+                } else if s == "false" {
+                    Some(Ok(Value::Result_(Ok(Box::new(Value::Bool(false))))))
+                } else if let Ok(n) = s.parse::<i64>() {
                     Some(Ok(Value::Result_(Ok(Box::new(Value::Int(n))))))
                 } else if let Ok(f) = s.parse::<f64>() {
                     Some(Ok(Value::Result_(Ok(Box::new(Value::Float(f))))))
