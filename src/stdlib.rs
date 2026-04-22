@@ -1438,13 +1438,6 @@ pub fn call_method(
             } else { None }
         }
         (Value::Str(_), "as_bytes" | "as_str") => Some(Ok(recv)),
-        // Vec<char>::as_str() — collect chars back into a String (Chars iterator pattern)
-        (Value::Vec(_), "as_str") => {
-            if let Value::Vec(v) = recv {
-                let s: String = v.iter().filter_map(|c| if let Value::Char(ch) = c { Some(*ch) } else { None }).collect();
-                Some(Ok(Value::Str(s)))
-            } else { None }
-        }
         (Value::Str(_), "push_str") => {
             // In Rust this mutates; at Level 0 we return a concatenated string
             if let Value::Str(mut s) = recv {
@@ -1528,16 +1521,6 @@ pub fn call_method(
         }
         (Value::Float(_), "tanh") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Float(f.tanh()))) } else { None }
-        }
-        (Value::Float(_), "powi") => {
-            if let Value::Float(f) = recv {
-                let n = match args.into_iter().next() {
-                    Some(Value::Int(n)) => n as i32,
-                    Some(Value::Float(x)) => x as i32,
-                    _ => 0,
-                };
-                Some(Ok(Value::Float(f.powi(n))))
-            } else { None }
         }
         (Value::Float(_), "to_radians") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Float(f.to_radians()))) } else { None }
