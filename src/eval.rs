@@ -1548,7 +1548,7 @@ impl Interpreter {
                         let matches_name = name == variant || name.ends_with(&format!("::{}", variant));
                         if !matches_name { return false; }
                         match (fields.as_slice(), inner) {
-                            ([], None) => true,
+                            ([], _) => true,
                             ([single], Some(v)) => self.match_pat(single, v, env),
                             (multi, Some(v)) if multi.len() > 1 => {
                                 if let Value::Tuple(vals) = v.as_ref() {
