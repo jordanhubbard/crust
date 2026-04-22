@@ -1093,7 +1093,7 @@ impl Parser {
                 if path.len() > 1 {
                     // check for struct literal: Path { field: val, ... }
                     if self.check(&TokenKind::LBrace) && self.looks_like_struct_lit() {
-                        let sname = path.last().unwrap().clone();
+                        let sname = path.join("::");
                         return self.parse_struct_lit(sname);
                     }
                     // function call on path

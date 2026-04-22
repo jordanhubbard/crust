@@ -1115,10 +1115,17 @@ impl Interpreter {
     // ── Method / static call dispatch ─────────────────────────────────────────
 
     pub fn call_method_or_static(&mut self, type_name: &str, method: &str, self_val: Option<Value>, args: Vec<Value>, env: Rc<RefCell<Env>>) -> EvalResult {
-        // 1. User-defined impl methods
+        // 1. User-defined impl methods — try exact type, then enum prefix (AppError::InvalidInput → AppError)
         let user_method = self.impls.get(type_name)
             .and_then(|methods| methods.iter().find(|m| m.name == method))
-            .cloned();
+            .cloned()
+            .or_else(|| {
+                if let Some(prefix) = type_name.rfind("::").map(|i| &type_name[..i]) {
+                    self.impls.get(prefix)
+                        .and_then(|methods| methods.iter().find(|m| m.name == method))
+                        .cloned()
+                } else { None }
+            });
 
         if let Some(fdef) = user_method {
             let cfn = CrustFn { params: fdef.params, body: fdef.body, captured: None };

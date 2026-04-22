@@ -1998,7 +1998,13 @@ pub fn call_method(
             match recv {
                 Value::Option_(Some(v)) => Some(Ok(Value::Result_(Ok(v)))),
                 Value::Option_(None) => {
-                    let err_val = args.into_iter().next().unwrap_or(Value::Str("None".to_string()));
+                    let arg = args.into_iter().next().unwrap_or(Value::Str("None".to_string()));
+                    let err_val = if let Value::Fn(cfn) = arg {
+                        match interp.call_crust_fn(&cfn, vec![], None) {
+                            Ok(v) => v,
+                            Err(e) => return Some(Err(e)),
+                        }
+                    } else { arg };
                     Some(Ok(Value::Result_(Err(Box::new(err_val)))))
                 }
                 other => Some(Ok(other)),
