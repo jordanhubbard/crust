@@ -1488,6 +1488,10 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Vec(a), Value::Vec(b)) => {
             a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
         }
+        (Value::Struct { type_name: ta, fields: fa }, Value::Struct { type_name: tb, fields: fb }) => {
+            ta == tb && fa.len() == fb.len()
+                && fa.iter().all(|(k, v)| fb.get(k).map(|v2| values_equal(v, v2)).unwrap_or(false))
+        }
         _ => false,
     }
 }
