@@ -443,7 +443,7 @@ pub fn call_method(
                 } else { Some(Ok(Value::Bool(true))) }
             } else { None }
         }
-        (Value::Vec(_), "first") => {
+        (Value::Vec(_), "first" | "next") => {
             if let Value::Vec(v) = recv {
                 Some(Ok(Value::Option_(v.into_iter().next().map(Box::new))))
             } else { None }
