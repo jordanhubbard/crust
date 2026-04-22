@@ -148,7 +148,12 @@ impl Parser {
             TokenKind::Enum   => { self.advance(); Ok(Item::Enum(self.parse_enum()?)) }
             TokenKind::Impl   => { self.advance(); Ok(Item::Impl(self.parse_impl()?)) }
             TokenKind::Use    => { self.advance(); Ok(Item::Use(self.parse_use()?)) }
-            TokenKind::Const  => { self.advance(); self.parse_const() }
+            TokenKind::Const  => {
+                self.advance();
+                // `const fn` → treat as regular function
+                if self.check(&TokenKind::Fn) { self.advance(); Ok(Item::Fn(self.parse_fn_def()?)) }
+                else { self.parse_const() }
+            }
             TokenKind::Type   => { self.advance(); self.parse_type_alias() }
             TokenKind::Static => {
                 self.advance();
@@ -620,6 +625,22 @@ impl Parser {
                 TokenKind::Ident(s) => { self.advance(); path.push(s); }
                 _ => { self.pos = saved_pos; break; }
             }
+        }
+        // Tuple struct pattern: let Rgb(r, g, b) = ...
+        if self.check(&TokenKind::LParen) {
+            let full_name = path.join("::");
+            self.advance(); // consume (
+            let mut pats = Vec::new();
+            while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
+                pats.push(self.parse_pat_single()?);
+                if !self.eat(&TokenKind::Comma) { break; }
+            }
+            self.eat(&TokenKind::RParen);
+            let pat = Pat::TupleStruct { name: full_name, fields: pats };
+            let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_ty()?) } else { None };
+            let init = if self.eat(&TokenKind::Eq) { Some(self.parse_expr(0)?) } else { None };
+            self.eat(&TokenKind::Semi);
+            return Ok(Stmt::LetPat { pat, ty, init });
         }
         if self.check(&TokenKind::LBrace) {
             // struct destructuring pattern

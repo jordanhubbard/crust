@@ -106,10 +106,36 @@ fn bind_pat(pat: &Pat, val: Value, env: &Rc<RefCell<Env>>) {
         }
         Pat::Ref(inner) => bind_pat(inner, val, env),
         Pat::TupleStruct { fields, .. } => {
-            if let Value::Tuple(items) = val {
-                for (p, v) in fields.iter().zip(items.into_iter()) {
-                    bind_pat(p, v, env);
+            match val {
+                Value::Tuple(items) => {
+                    for (p, v) in fields.iter().zip(items.into_iter()) {
+                        bind_pat(p, v, env);
+                    }
                 }
+                Value::Struct { fields: sfields, .. } => {
+                    // Tuple struct stored as Struct with "0","1",... keys
+                    for (i, p) in fields.iter().enumerate() {
+                        if let Some(v) = sfields.get(&i.to_string()).cloned() {
+                            bind_pat(p, v, env);
+                        }
+                    }
+                }
+                Value::Enum { inner: Some(inner), .. } => {
+                    // e.g. Some(x) or Variant(a, b)
+                    match *inner {
+                        Value::Tuple(items) => {
+                            for (p, v) in fields.iter().zip(items.into_iter()) {
+                                bind_pat(p, v, env);
+                            }
+                        }
+                        single => {
+                            if let Some(p) = fields.first() {
+                                bind_pat(p, single, env);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         Pat::Struct { fields, .. } => {
@@ -1315,6 +1341,17 @@ impl Interpreter {
             _ => "_".to_string(),
         };
 
+        // Detect iter_mut() — track source var name for write-back
+        let iter_mut_source: Option<String> = match &args[1] {
+            Expr::MethodCall { receiver, method, .. } if method == "iter_mut" => {
+                match receiver.as_ref() {
+                    Expr::Ident(name) => Some(name.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+
         let iterable = self.eval_expr(&args[1], Rc::clone(&env))?;
         let body = match &args[2] {
             Expr::Block(b) => b.clone(),
@@ -1338,17 +1375,47 @@ impl Interpreter {
             other => return Err(err(format!("cannot iterate over {}", other.type_name()))),
         };
 
+        // For iter_mut, we'll rebuild the vec and write it back at the end
+        let mut mutated: Option<Vec<Value>> = iter_mut_source.as_ref().map(|_| Vec::new());
+
         for item in items {
             let child = Rc::new(RefCell::new(Env::child(Rc::clone(&env))));
             // Bind the pattern variable
             bind_pattern_simple(&var_name, item, &mut child.borrow_mut());
             match self.eval_block(&body, Rc::clone(&child)) {
                 Ok(_) => {}
-                Err(Signal::Break(_)) => break,
-                Err(Signal::Continue) => continue,
+                Err(Signal::Break(_)) => {
+                    // Still need to capture remaining items unchanged for iter_mut
+                    if let Some(ref mut mv) = mutated {
+                        if let Some(cur) = child.borrow().get(&var_name) {
+                            mv.push(cur);
+                        }
+                    }
+                    break;
+                }
+                Err(Signal::Continue) => {
+                    if let Some(ref mut mv) = mutated {
+                        if let Some(cur) = child.borrow().get(&var_name) {
+                            mv.push(cur);
+                        }
+                    }
+                    continue;
+                }
                 Err(e) => return Err(e),
             }
+            // Capture possibly-modified item for iter_mut write-back
+            if let Some(ref mut mv) = mutated {
+                if let Some(cur) = child.borrow().get(&var_name) {
+                    mv.push(cur);
+                }
+            }
         }
+
+        // Write back for iter_mut
+        if let (Some(source_name), Some(new_items)) = (iter_mut_source, mutated) {
+            env.borrow_mut().set(&source_name, Value::Vec(new_items));
+        }
+
         Ok(Value::Unit)
     }
 

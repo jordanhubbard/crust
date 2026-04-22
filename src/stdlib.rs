@@ -437,6 +437,8 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
         "f64::PI" | "std::f64::consts::PI" => Some(Ok(Value::Float(std::f64::consts::PI))),
         "f64::E" | "std::f64::consts::E" => Some(Ok(Value::Float(std::f64::consts::E))),
 
+        // Generic T::default() — return zero-like value for any unresolved generic type
+        s if s.ends_with("::default") => Some(Ok(Value::Int(0))),
 
         _ => None,
     }
@@ -2580,6 +2582,49 @@ pub fn call_method(
                 }
             }
             Some(Ok(Value::Tuple(vec![Value::Vec(yes), Value::Vec(no)])))
+        }
+        (Value::Range(start, end, inclusive), "skip_while") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end = if inc { e + 1 } else { e };
+            let func = args.into_iter().next().unwrap_or(Value::Unit);
+            let mut result = Vec::new();
+            let mut skipping = true;
+            if let Value::Fn(cfn) = &func {
+                for n in s..end {
+                    if skipping {
+                        match interp.call_crust_fn(cfn, vec![Value::Int(n)], None) {
+                            Ok(v) if v.is_truthy() => continue,
+                            Ok(_) => { skipping = false; result.push(Value::Int(n)); }
+                            Err(e) => return Some(Err(e)),
+                        }
+                    } else {
+                        result.push(Value::Int(n));
+                    }
+                }
+            }
+            Some(Ok(Value::Vec(result)))
+        }
+        (Value::Range(start, end, inclusive), "take_while") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end = if inc { e + 1 } else { e };
+            let func = args.into_iter().next().unwrap_or(Value::Unit);
+            let mut result = Vec::new();
+            if let Value::Fn(cfn) = &func {
+                for n in s..end {
+                    match interp.call_crust_fn(cfn, vec![Value::Int(n)], None) {
+                        Ok(v) if v.is_truthy() => result.push(Value::Int(n)),
+                        Ok(_) => break,
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+            }
+            Some(Ok(Value::Vec(result)))
+        }
+        (Value::Range(start, end, inclusive), "peekable") => {
+            // Convert range to vec for peekable
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end = if inc { e + 1 } else { e };
+            Some(Ok(Value::Vec((s..end).map(Value::Int).collect())))
         }
         (Value::Range(..), "clone") => Some(Ok(recv)),
 
