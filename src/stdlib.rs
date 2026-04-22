@@ -285,7 +285,27 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
             Some(Ok(Value::Option_(char::from_u32(n).map(|c| Box::new(Value::Char(c))))))
         }
 
-        // Numeric
+        // Numeric type conversions: i64::from(x), f64::from(x), etc.
+        "i64::from" | "i32::from" | "i16::from" | "i8::from" | "u64::from" | "u32::from" | "u16::from" | "u8::from" | "usize::from" | "isize::from" => {
+            let v = args.into_iter().next().unwrap_or(Value::Int(0));
+            Some(Ok(match v {
+                Value::Int(n) => Value::Int(n),
+                Value::Float(f) => Value::Int(f as i64),
+                Value::Char(c) => Value::Int(c as i64),
+                Value::Bool(b) => Value::Int(b as i64),
+                other => other,
+            }))
+        }
+        "f64::from" | "f32::from" => {
+            let v = args.into_iter().next().unwrap_or(Value::Float(0.0));
+            Some(Ok(match v {
+                Value::Int(n) => Value::Float(n as f64),
+                Value::Float(f) => Value::Float(f),
+                other => other,
+            }))
+        }
+
+        // Numeric constants
         "std::i64::MIN" | "i64::MIN" => Some(Ok(Value::Int(i64::MIN))),
         "std::i64::MAX" | "i64::MAX" => Some(Ok(Value::Int(i64::MAX))),
 
@@ -1108,6 +1128,36 @@ pub fn call_method(
         }
         (Value::Str(_), "trim_end" | "trim_right") => {
             if let Value::Str(s) = recv { Some(Ok(Value::Str(s.trim_end().to_string()))) } else { None }
+        }
+        (Value::Str(_), "split_at") => {
+            if let Value::Str(s) = recv {
+                let mid = match args.into_iter().next() {
+                    Some(Value::Int(n)) => n as usize,
+                    _ => return Some(Err(err("split_at requires usize"))),
+                };
+                let mid = mid.min(s.len());
+                Some(Ok(Value::Tuple(vec![
+                    Value::Str(s[..mid].to_string()),
+                    Value::Str(s[mid..].to_string()),
+                ])))
+            } else { None }
+        }
+        (Value::Str(_), "split_once") => {
+            if let Value::Str(s) = recv {
+                let pat = match args.into_iter().next() {
+                    Some(Value::Str(p)) => p,
+                    Some(Value::Char(c)) => c.to_string(),
+                    _ => return Some(Ok(Value::Option_(None))),
+                };
+                Some(Ok(if let Some((a, b)) = s.split_once(&*pat) {
+                    Value::Option_(Some(Box::new(Value::Tuple(vec![
+                        Value::Str(a.to_string()),
+                        Value::Str(b.to_string()),
+                    ]))))
+                } else {
+                    Value::Option_(None)
+                }))
+            } else { None }
         }
         (Value::Str(_), "split") => {
             if let Value::Str(s) = recv {
