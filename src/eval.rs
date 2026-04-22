@@ -520,13 +520,22 @@ impl Interpreter {
                 env.borrow_mut().define(name, val);
                 Ok(Value::Unit)
             }
-            Stmt::LetPat { pat, init, .. } => {
+            Stmt::LetPat { pat, init, else_block, .. } => {
                 let val = if let Some(expr) = init {
                     self.eval_expr(expr, Rc::clone(&env))?
                 } else {
                     Value::Unit
                 };
-                bind_pat(pat, val, &env);
+                // let-else: if pattern doesn't match, run else_block (must diverge)
+                if let Some(else_blk) = else_block {
+                    let mut tmp = crate::env::Env::child(Rc::clone(&env));
+                    if !self.match_pat(pat, &val, &mut tmp) {
+                        return self.eval_block(else_blk, Rc::clone(&env));
+                    }
+                    for (k, v) in tmp.vars() { env.borrow_mut().define(&k, v); }
+                } else {
+                    bind_pat(pat, val, &env);
+                }
                 Ok(Value::Unit)
             }
             Stmt::Semi(expr) => {
@@ -1052,6 +1061,7 @@ impl Interpreter {
                                 pat: pat.clone(),
                                 ty: None,
                                 init: Some(Expr::Ident(synth.clone())),
+                                else_block: None,
                             });
                         }
                     }

@@ -607,8 +607,9 @@ impl Parser {
             let pat = self.parse_pat()?;
             let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_ty()?) } else { None };
             let init = if self.eat(&TokenKind::Eq) { Some(self.parse_expr(0)?) } else { None };
+            let else_block = if self.eat(&TokenKind::Else) { Some(self.parse_block()?) } else { None };
             self.eat(&TokenKind::Semi);
-            return Ok(Stmt::LetPat { pat, ty, init });
+            return Ok(Stmt::LetPat { pat, ty, init, else_block });
         }
         let name = match self.peek().clone() {
             TokenKind::Ident(s) => { self.advance(); s }
@@ -639,8 +640,9 @@ impl Parser {
             let pat = Pat::TupleStruct { name: full_name, fields: pats };
             let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_ty()?) } else { None };
             let init = if self.eat(&TokenKind::Eq) { Some(self.parse_expr(0)?) } else { None };
+            let else_block = if self.eat(&TokenKind::Else) { Some(self.parse_block()?) } else { None };
             self.eat(&TokenKind::Semi);
-            return Ok(Stmt::LetPat { pat, ty, init });
+            return Ok(Stmt::LetPat { pat, ty, init, else_block });
         }
         if self.check(&TokenKind::LBrace) {
             // struct destructuring pattern
@@ -668,8 +670,9 @@ impl Parser {
                 let pat = Pat::Struct { name: full_name, fields, rest };
                 let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_ty()?) } else { None };
                 let init = if self.eat(&TokenKind::Eq) { Some(self.parse_expr(0)?) } else { None };
+                let else_block = if self.eat(&TokenKind::Else) { Some(self.parse_block()?) } else { None };
                 self.eat(&TokenKind::Semi);
-                return Ok(Stmt::LetPat { pat, ty, init });
+                return Ok(Stmt::LetPat { pat, ty, init, else_block });
             }
             // Not a valid struct pattern, reset and fall through
             self.pos = saved_pos;
@@ -684,6 +687,14 @@ impl Parser {
         let name = if path.len() == 1 { path.into_iter().next().unwrap() } else { path.join("::") };
         let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_ty()?) } else { None };
         let init = if self.eat(&TokenKind::Eq) { Some(self.parse_expr(0)?) } else { None };
+        // let-else: let PATTERN = EXPR else { BLOCK }
+        if self.check(&TokenKind::Else) {
+            self.advance();
+            let else_block = self.parse_block()?;
+            let pat = Pat::Ident(name);
+            self.eat(&TokenKind::Semi);
+            return Ok(Stmt::LetPat { pat, ty, init, else_block: Some(else_block) });
+        }
         self.eat(&TokenKind::Semi);
         Ok(Stmt::Let { name, mutable, ty, init })
     }

@@ -140,7 +140,7 @@ impl Codegen {
                 let init_str = init.as_ref().map(|e| format!(" = {}", self.emit_expr_level0(e))).unwrap_or_default();
                 format!("let {}{}{}{};", mut_str, name, ty_str, init_str)
             }
-            Stmt::LetPat { pat, ty, init } => {
+            Stmt::LetPat { pat, ty, init, .. } => {
                 let ty_str = ty.as_ref().map(|t| format!(": {}", self.emit_ty(t))).unwrap_or_default();
                 let init_str = init.as_ref().map(|e| format!(" = {}", self.emit_expr_level0(e))).unwrap_or_default();
                 format!("let {}{}{};", emit_pat(pat), ty_str, init_str)
