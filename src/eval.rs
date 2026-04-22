@@ -168,6 +168,7 @@ pub struct Interpreter {
     structs: HashMap<String, StructDef>,
     impls: HashMap<String, Vec<FnDef>>,
     traits: HashMap<String, Vec<FnDef>>, // default trait methods
+    consts: HashMap<String, Value>,
     pub output: Vec<String>,
     // Populated by call_crust_fn when a &mut self method modifies self
     pub self_writeback: Option<Value>,
@@ -184,6 +185,7 @@ impl Interpreter {
             structs: HashMap::new(),
             impls: HashMap::new(),
             traits: HashMap::new(),
+            consts: HashMap::new(),
             output: Vec::new(),
             self_writeback: None,
             mut_writebacks: Vec::new(),
@@ -242,7 +244,13 @@ impl Interpreter {
                 }
                 self.impls.entry(def.type_name.clone()).or_default().extend(def.methods);
             }
-            Item::Use(_) | Item::Const { .. } | Item::TypeAlias { .. } => {}
+            Item::Const { name, value, .. } => {
+                let env = Rc::new(RefCell::new(Env::new()));
+                if let Ok(v) = self.eval_expr(&value, env) {
+                    self.consts.insert(name, v);
+                }
+            }
+            Item::Use(_) | Item::TypeAlias { .. } => {}
         }
         Ok(())
     }
@@ -437,6 +445,10 @@ impl Interpreter {
                 // Fall back: zero-arg builtins like `None`
                 if let Some(r) = crate::stdlib::call_builtin(name, vec![], self) {
                     return r;
+                }
+                // Fall back: top-level constants
+                if let Some(v) = self.consts.get(name).cloned() {
+                    return Ok(v);
                 }
                 let hint = if name.chars().next().map_or(false, |c| c.is_uppercase()) {
                     " (if this is an enum variant, make sure it's constructed with `Type::Variant` or `Variant(args)`)"
