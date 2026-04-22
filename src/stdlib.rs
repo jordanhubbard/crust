@@ -1611,6 +1611,42 @@ pub fn call_method(
                 Some(Ok(Value::Int(n.wrapping_add(rhs))))
             } else { None }
         }
+        (Value::Int(_), "wrapping_sub") => {
+            if let Value::Int(n) = recv {
+                let rhs = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                Some(Ok(Value::Int(n.wrapping_sub(rhs))))
+            } else { None }
+        }
+        (Value::Int(_), "wrapping_mul") => {
+            if let Value::Int(n) = recv {
+                let rhs = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                Some(Ok(Value::Int(n.wrapping_mul(rhs))))
+            } else { None }
+        }
+        (Value::Int(_), "checked_sub") => {
+            if let Value::Int(n) = recv {
+                let rhs = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                Some(Ok(Value::Option_(n.checked_sub(rhs).map(|v| Box::new(Value::Int(v))))))
+            } else { None }
+        }
+        (Value::Int(_), "checked_mul") => {
+            if let Value::Int(n) = recv {
+                let rhs = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                Some(Ok(Value::Option_(n.checked_mul(rhs).map(|v| Box::new(Value::Int(v))))))
+            } else { None }
+        }
+        (Value::Int(_), "saturating_add") => {
+            if let Value::Int(n) = recv {
+                let rhs = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                Some(Ok(Value::Int(n.saturating_add(rhs))))
+            } else { None }
+        }
+        (Value::Int(_), "saturating_sub") => {
+            if let Value::Int(n) = recv {
+                let rhs = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                Some(Ok(Value::Int(n.saturating_sub(rhs))))
+            } else { None }
+        }
         (Value::Int(_), "to_string") => {
             if let Value::Int(n) = recv { Some(Ok(Value::Str(n.to_string()))) } else { None }
         }
