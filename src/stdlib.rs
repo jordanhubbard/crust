@@ -135,7 +135,7 @@ pub fn call_method_mut(
             v.clear();
             Some((Ok(Value::Unit), Value::Vec(v)))
         }
-        (Value::Vec(mut v), "extend") => {
+        (Value::Vec(mut v), "extend" | "extend_from_slice") => {
             if let Some(Value::Vec(other)) = args.into_iter().next() {
                 v.extend(other);
             }
@@ -164,8 +164,29 @@ pub fn call_method_mut(
         }
         (Value::Vec(mut v), "drain") => {
             // drain(range) — collect drained elements, keep remaining
-            let drained = v.drain(..).collect::<Vec<_>>();
-            Some((Ok(Value::Vec(drained)), Value::Vec(Vec::new())))
+            let (lo, hi) = match args.into_iter().next() {
+                Some(Value::Range(lo, hi, inc)) => {
+                    let lo = lo.max(0) as usize;
+                    let hi = if hi == i64::MAX { v.len() }
+                             else if inc { (hi + 1).min(v.len() as i64) as usize }
+                             else { hi.min(v.len() as i64) as usize };
+                    (lo, hi)
+                }
+                _ => (0, v.len()),
+            };
+            let lo = lo.min(v.len());
+            let hi = hi.min(v.len());
+            let drained: Vec<Value> = v.drain(lo..hi).collect();
+            Some((Ok(Value::Vec(drained)), Value::Vec(v)))
+        }
+        (Value::Vec(mut v), "swap") => {
+            let mut it = args.into_iter();
+            if let (Some(Value::Int(a)), Some(Value::Int(b))) = (it.next(), it.next()) {
+                let a = a as usize;
+                let b = b as usize;
+                if a < v.len() && b < v.len() { v.swap(a, b); }
+            }
+            Some((Ok(Value::Unit), Value::Vec(v)))
         }
         (Value::Vec(mut v), "retain") => {
             let func = args.into_iter().next().unwrap_or(Value::Unit);
@@ -889,7 +910,14 @@ pub fn call_method(
         (Value::Vec(_), "peekable") => Some(Ok(recv)),
         (Value::Vec(_), "cloned" | "copied" | "to_vec" | "to_owned") => Some(Ok(recv)),
         (Value::Vec(_), "by_ref") => Some(Ok(recv)),
-        (Value::Vec(_), "cycle") => Some(Ok(recv)), // simplified: returns self (not infinite)
+        (Value::Vec(_), "cycle") => {
+            // Produce 1024 repetitions — take() will trim to the right size
+            if let Value::Vec(v) = recv {
+                if v.is_empty() { return Some(Ok(Value::Vec(Vec::new()))); }
+                let repeated: Vec<Value> = v.iter().cycle().take(1024).cloned().collect();
+                Some(Ok(Value::Vec(repeated)))
+            } else { None }
+        }
         (Value::Vec(_), "step_by") => {
             if let Value::Vec(v) = recv {
                 let n = match args.into_iter().next() { Some(Value::Int(n)) => n.max(1) as usize, _ => 1 };
