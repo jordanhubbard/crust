@@ -678,8 +678,8 @@ pub fn call_method(
             }
             Some(Ok(recv))
         }
-        (Value::Vec(_), "collect_string") => {
-            // collect::<String>() — join chars/strings into a String
+        (Value::Vec(_), "collect_string" | "as_str") => {
+            // collect::<String>() or as_str() — join chars/strings into a String
             if let Value::Vec(v) = recv {
                 let s: String = v.iter().map(|x| match x {
                     Value::Char(c) => c.to_string(),
@@ -1153,6 +1153,8 @@ pub fn call_method(
         (Value::Str(_), "to_lowercase") => {
             if let Value::Str(s) = recv { Some(Ok(Value::Str(s.to_lowercase()))) } else { None }
         }
+        // String::collect() is identity (e.g. from to_uppercase().collect())
+        (Value::Str(_), "collect") => { Some(Ok(recv)) }
         (Value::Str(_), "trim") => {
             if let Value::Str(s) = recv { Some(Ok(Value::Str(s.trim().to_string()))) } else { None }
         }
@@ -1405,6 +1407,9 @@ pub fn call_method(
         (Value::Float(_), "abs") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Float(f.abs()))) } else { None }
         }
+        (Value::Float(_), "signum") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.signum()))) } else { None }
+        }
         (Value::Float(_), "floor") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Float(f.floor()))) } else { None }
         }
@@ -1482,6 +1487,9 @@ pub fn call_method(
         // ── Integer methods ───────────────────────────────────────────────────
         (Value::Int(_), "abs") => {
             if let Value::Int(n) = recv { Some(Ok(Value::Int(n.abs()))) } else { None }
+        }
+        (Value::Int(_), "signum") => {
+            if let Value::Int(n) = recv { Some(Ok(Value::Int(n.signum()))) } else { None }
         }
         (Value::Int(_), "pow") => {
             if let Value::Int(n) = recv {
