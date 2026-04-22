@@ -452,6 +452,8 @@ impl Parser {
                         _ => {}
                     }
                 }
+                // dyn Trait — consume dyn, parse the following type
+                if name == "dyn" { return self.parse_ty(); }
                 // Fn(T) -> R trait syntax
                 if matches!(name.as_str(), "Fn" | "FnMut" | "FnOnce") && self.check(&TokenKind::LParen) {
                     self.eat(&TokenKind::LParen);

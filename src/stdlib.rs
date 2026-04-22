@@ -250,6 +250,11 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
         "None"  => Some(Ok(Value::Option_(None))),
         "Ok"    => Some(Ok(Value::Result_(Ok(Box::new(args.into_iter().next().unwrap_or(Value::Unit)))))),
         "Err"   => Some(Ok(Value::Result_(Err(Box::new(args.into_iter().next().unwrap_or(Value::Unit)))))),
+        // Box::new is identity at Level 0 (no heap allocation needed)
+        "Box::new" => Some(Ok(args.into_iter().next().unwrap_or(Value::Unit))),
+        "Rc::new" | "Arc::new" | "Cell::new" | "RefCell::new" => {
+            Some(Ok(args.into_iter().next().unwrap_or(Value::Unit)))
+        }
 
         // String conversions
         "String::from" | "String::new" => {
