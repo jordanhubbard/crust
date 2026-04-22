@@ -253,6 +253,7 @@ fn write_back_entry_map(map_name: &str, new_val: Value, env: &Rc<RefCell<Env>>) 
 pub struct Interpreter {
     fns: HashMap<String, CrustFn>,
     structs: HashMap<String, StructDef>,
+    enums: HashMap<String, crate::ast::EnumDef>,
     impls: HashMap<String, Vec<FnDef>>,
     traits: HashMap<String, Vec<FnDef>>, // default trait methods
     consts: HashMap<String, Value>,
@@ -270,6 +271,7 @@ impl Interpreter {
         Interpreter {
             fns: HashMap::new(),
             structs: HashMap::new(),
+            enums: HashMap::new(),
             impls: HashMap::new(),
             traits: HashMap::new(),
             consts: HashMap::new(),
@@ -313,7 +315,7 @@ impl Interpreter {
                 self.fns.insert(def.name.clone(), CrustFn { params: def.params, ret_ty: def.ret_ty, body: def.body, captured: None });
             }
             Item::Struct(def) => { self.structs.insert(def.name.clone(), def); }
-            Item::Enum(_) => {} // enums are constructed by name at runtime
+            Item::Enum(def) => { self.enums.insert(def.name.clone(), def); }
             Item::Trait { name, methods } => {
                 self.traits.insert(name, methods);
             }
@@ -337,7 +339,29 @@ impl Interpreter {
                     self.consts.insert(name, v);
                 }
             }
-            Item::Use(_) | Item::TypeAlias { .. } => {}
+            Item::Use(path) => {
+                // `use SomeEnum::*` — register all variants as constructors in global env
+                if path.last().map(|s| s == "*").unwrap_or(false) && path.len() >= 2 {
+                    let enum_name = path[path.len()-2].as_str();
+                    if let Some(edef) = self.enums.get(enum_name).cloned() {
+                        let type_name = edef.name.clone();
+                        for variant in &edef.variants {
+                            let vname = variant.name.clone();
+                            let val = match &variant.data {
+                                crate::ast::VariantData::Unit => {
+                                    Value::Enum { type_name: type_name.clone(), variant: vname.clone(), inner: None }
+                                }
+                                _ => {
+                                    // Constructor function — create a closure stub
+                                    Value::Enum { type_name: type_name.clone(), variant: vname.clone(), inner: None }
+                                }
+                            };
+                            self.consts.insert(vname, val);
+                        }
+                    }
+                }
+            }
+            Item::TypeAlias { .. } => {}
         }
         Ok(())
     }
@@ -361,6 +385,12 @@ impl Interpreter {
         let func = self.fns.get(name).cloned();
         if let Some(cfn) = func {
             return self.call_crust_fn(&cfn, args, None);
+        }
+
+        // Check consts (may hold enum variant constructors from `use Enum::*`)
+        let const_val = self.consts.get(name).cloned();
+        if let Some(val @ Value::Enum { .. }) = const_val {
+            return self.call_fn_value(&val, args);
         }
 
         // Tuple struct constructor: struct Foo(T1, T2) → call Foo(v1, v2) creates struct
