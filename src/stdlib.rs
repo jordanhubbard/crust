@@ -363,6 +363,24 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
         "std::i64::MIN" | "i64::MIN" => Some(Ok(Value::Int(i64::MIN))),
         "std::i64::MAX" | "i64::MAX" => Some(Ok(Value::Int(i64::MAX))),
 
+        // Radix parsing: i64::from_str_radix("ff", 16) -> Ok(255)
+        "i64::from_str_radix" | "i32::from_str_radix" | "u64::from_str_radix" | "u32::from_str_radix" |
+        "i8::from_str_radix" | "u8::from_str_radix" | "usize::from_str_radix" => {
+            let mut it = args.into_iter();
+            let s = match it.next() {
+                Some(Value::Str(s)) => s,
+                _ => return Some(Ok(Value::Result_(Err(Box::new(Value::Str("invalid input".to_string())))))),
+            };
+            let radix = match it.next() {
+                Some(Value::Int(n)) => n as u32,
+                _ => 10,
+            };
+            match i64::from_str_radix(&s, radix) {
+                Ok(n) => Some(Ok(Value::Result_(Ok(Box::new(Value::Int(n)))))),
+                Err(_) => Some(Ok(Value::Result_(Err(Box::new(Value::Str(format!("invalid digit in base {}", radix))))))),
+            }
+        }
+
         // Printing (handled as macros, but support function-style too)
         "print"    | "println" => {
             let s = args.into_iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
@@ -1491,6 +1509,15 @@ pub fn call_method(
         }
         (Value::Float(_), "round") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Float(f.round()))) } else { None }
+        }
+        (Value::Float(_), "trunc") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.trunc()))) } else { None }
+        }
+        (Value::Float(_), "fract") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.fract()))) } else { None }
+        }
+        (Value::Float(_), "recip") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Float(f.recip()))) } else { None }
         }
         (Value::Float(_), "sin") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Float(f.sin()))) } else { None }
