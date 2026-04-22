@@ -863,6 +863,16 @@ impl Interpreter {
                         m.get(&k).cloned()
                             .ok_or_else(|| err(format!("key `{}` not found", k)))
                     }
+                    (Value::HashMap(m), Value::Char(c)) => {
+                        let k = c.to_string();
+                        m.get(&k).cloned()
+                            .ok_or_else(|| err(format!("key `{}` not found", k)))
+                    }
+                    (Value::HashMap(m), Value::Int(n)) => {
+                        let k = n.to_string();
+                        m.get(&k).cloned()
+                            .ok_or_else(|| err(format!("key `{}` not found", k)))
+                    }
                     (Value::Str(s), Value::Int(i)) => {
                         let idx = i as usize;
                         s.chars().nth(idx)
@@ -1458,10 +1468,19 @@ impl Interpreter {
                 }
                 true
             }
-            (Pat::Or(pats), _) => pats.iter().any(|p| {
-                let mut tmp = Env::child(Rc::new(RefCell::new(env.clone())));
-                self.match_pat(p, val, &mut tmp)
-            }),
+            (Pat::Or(pats), _) => {
+                for p in pats {
+                    let mut tmp = Env::child(Rc::new(RefCell::new(env.clone())));
+                    if self.match_pat(p, val, &mut tmp) {
+                        // Merge bindings from tmp back into env
+                        for (k, v) in tmp.vars() {
+                            env.define(&k, v);
+                        }
+                        return true;
+                    }
+                }
+                false
+            }
             (Pat::Bind { name, pat }, _) => {
                 if self.match_pat(pat, val, env) {
                     env.set(name, val.clone());
@@ -1607,6 +1626,29 @@ impl Interpreter {
                 }
             }
             if let Some(e) = last_err { return Err(e); }
+        }
+
+        // 2. to_string() on user types with Display impl → call fmt
+        if method == "to_string" {
+            if let Some(val) = &self_val {
+                let tn = match val {
+                    Value::Struct { type_name, .. } | Value::Enum { type_name, .. } => Some(type_name.clone()),
+                    _ => None,
+                };
+                if let Some(tn) = tn {
+                    let has_fmt = self.impls.get(&tn)
+                        .map(|ms| ms.iter().any(|m| m.name == "fmt"))
+                        .unwrap_or(false);
+                    if has_fmt {
+                        let old_buf = self.display_buf.replace(String::new());
+                        let env = Rc::new(RefCell::new(crate::env::Env::new()));
+                        let _ = self.call_method_or_static(&tn, "fmt", self_val.clone(), vec![Value::Unit], env);
+                        let s = self.display_buf.take().unwrap_or_default();
+                        self.display_buf = old_buf;
+                        return Ok(Value::Str(s));
+                    }
+                }
+            }
         }
 
         // 2. Built-in methods (instance or static) from stdlib
@@ -1899,6 +1941,8 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
             ta == tb && fa.len() == fb.len()
                 && fa.iter().all(|(k, v)| fb.get(k).map(|v2| values_equal(v, v2)).unwrap_or(false))
         }
+        (Value::Result_(Ok(a)),  Value::Result_(Ok(b)))  => values_equal(a, b),
+        (Value::Result_(Err(a)), Value::Result_(Err(b))) => values_equal(a, b),
         _ => false,
     }
 }

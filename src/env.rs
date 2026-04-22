@@ -56,6 +56,10 @@ impl Env {
     pub fn all_names(&self) -> Vec<String> {
         self.vars.keys().cloned().collect()
     }
+
+    pub fn vars(&self) -> HashMap<String, Value> {
+        self.vars.clone()
+    }
 }
 
 impl Default for Env {
