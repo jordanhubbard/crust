@@ -284,7 +284,13 @@ pub fn call_value_as_fn(func: &Value, args: Vec<Value>, interp: &mut Interpreter
                 let r = call_method("", variant, Some(first.clone()), rest.to_vec(), interp);
                 if let Some(result) = r { return result; }
             }
-            Err(Signal::Err(CrustError::runtime(format!("cannot call {}::{} as fn", type_name, variant))))
+            // Final fallback: treat as enum constructor
+            let inner = match args.len() {
+                0 => None,
+                1 => Some(Box::new(args.into_iter().next().unwrap())),
+                _ => Some(Box::new(Value::Tuple(args))),
+            };
+            Ok(Value::Enum { type_name: type_name.clone(), variant: variant.clone(), inner })
         }
         _ => Err(Signal::Err(CrustError::runtime(format!("value is not callable: {:?}", func)))),
     }
@@ -629,10 +635,7 @@ pub fn call_method(
             if let Value::Vec(v) = recv {
                 let func = args.into_iter().next().unwrap_or(Value::Unit);
                 let result: Result<Vec<Value>, Signal> = v.into_iter().map(|item| {
-                    match &func {
-                        Value::Fn(cfn) => interp.call_crust_fn(cfn, vec![item], None),
-                        _ => Ok(item),
-                    }
+                    interp.call_fn_value(&func, vec![item])
                 }).collect();
                 Some(result.map(Value::Vec))
             } else { None }
@@ -667,12 +670,9 @@ pub fn call_method(
                 let func = args.into_iter().next().unwrap_or(Value::Unit);
                 let mut result = Vec::new();
                 for item in v {
-                    let keep = match &func {
-                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![item.clone()], None) {
-                            Ok(v) => v.is_truthy(),
-                            Err(e) => return Some(Err(e)),
-                        },
-                        _ => true,
+                    let keep = match call_value_as_fn(&func, vec![item.clone()], interp) {
+                        Ok(v) => v.is_truthy(),
+                        Err(e) => return Some(Err(e)),
                     };
                     if keep { result.push(item); }
                 }
@@ -684,12 +684,9 @@ pub fn call_method(
                 let func = args.into_iter().next().unwrap_or(Value::Unit);
                 let mut result = Vec::new();
                 for item in v {
-                    let mapped = match &func {
-                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![item], None) {
-                            Ok(v) => v,
-                            Err(e) => return Some(Err(e)),
-                        },
-                        _ => item,
+                    let mapped = match call_value_as_fn(&func, vec![item], interp) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
                     };
                     match mapped {
                         Value::Option_(Some(inner)) => result.push(*inner),
@@ -1955,12 +1952,9 @@ pub fn call_method(
                 Value::Option_(None) => Some(Ok(Value::Option_(None))),
                 Value::Option_(Some(v)) => {
                     let func = args.into_iter().next().unwrap_or(Value::Unit);
-                    let result = match &func {
-                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![*v], None) {
-                            Ok(v) => v,
-                            Err(e) => return Some(Err(e)),
-                        },
-                        _ => *v,
+                    let result = match call_value_as_fn(&func, vec![*v], interp) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
                     };
                     Some(Ok(Value::Option_(Some(Box::new(result)))))
                 }
@@ -2124,12 +2118,9 @@ pub fn call_method(
             match recv {
                 Value::Result_(Ok(v)) => {
                     let func = args.into_iter().next().unwrap_or(Value::Unit);
-                    let result = match &func {
-                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![*v], None) {
-                            Ok(v) => v,
-                            Err(e) => return Some(Err(e)),
-                        },
-                        _ => *v,
+                    let result = match call_value_as_fn(&func, vec![*v], interp) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
                     };
                     Some(Ok(Value::Result_(Ok(Box::new(result)))))
                 }

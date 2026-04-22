@@ -349,8 +349,12 @@ impl Interpreter {
         // Extract the value in a separate statement so the borrow is dropped before
         // call_crust_fn runs (which may need to borrow_mut the same env via captures).
         let local_fn = env.borrow().get(name);
-        if let Some(Value::Fn(cfn)) = local_fn {
-            return self.call_crust_fn(&cfn, args, None);
+        if let Some(val) = local_fn {
+            match val {
+                Value::Fn(cfn) => return self.call_crust_fn(&cfn, args, None),
+                Value::Enum { .. } => return self.call_fn_value(&val, args),
+                _ => {}
+            }
         }
 
         // Check top-level registered functions
@@ -374,6 +378,11 @@ impl Interpreter {
         crate::stdlib::call_builtin(name, args, self)
             .ok_or_else(|| err(format!("undefined function: {}", name)))
             .and_then(|r| r)
+    }
+
+    /// Call a value as a function: handles Fn closures, enum constructors, and identity.
+    pub fn call_fn_value(&mut self, func: &Value, args: Vec<Value>) -> EvalResult {
+        crate::stdlib::call_value_as_fn(func, args, self)
     }
 
     pub fn call_crust_fn(&mut self, cfn: &CrustFn, args: Vec<Value>, self_val: Option<Value>) -> EvalResult {
@@ -676,10 +685,7 @@ impl Interpreter {
                     }
                     _ => {
                         let func_val = self.eval_expr(func, Rc::clone(&env))?;
-                        match func_val {
-                            Value::Fn(cfn) => self.call_crust_fn(&cfn, arg_vals, None),
-                            _ => Err(err(format!("not a function: {}", func_val.type_name()))),
-                        }
+                        self.call_fn_value(&func_val, arg_vals)
                     }
                 };
                 // Write back &mut params
