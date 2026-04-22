@@ -348,7 +348,12 @@ impl Interpreter {
                     _ => {
                         let name = parts.last().unwrap().clone();
                         let type_name = parts[parts.len()-2].clone();
-                        // Try as zero-arg static / constant (e.g. i64::MAX, f64::INFINITY)
+                        // Try full path and progressively shorter paths as qualified lookups
+                        // std::f64::consts::PI → try "std::f64::consts::PI", "f64::consts::PI", "consts::PI"
+                        let full = parts.join("::");
+                        if let Some(r) = crate::stdlib::call_builtin(&full, vec![], self) {
+                            return r;
+                        }
                         let qualified = format!("{}::{}", type_name, name);
                         if let Some(r) = crate::stdlib::call_builtin(&qualified, vec![], self) {
                             return r;
