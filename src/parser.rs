@@ -67,6 +67,16 @@ impl Parser {
         }
     }
 
+    // Read an identifier or qualified path (a::b::C), returning the last segment.
+    fn expect_path_tail(&mut self) -> Result<String> {
+        let mut name = self.expect_ident()?;
+        while self.check(&TokenKind::ColonColon) {
+            self.advance();
+            name = self.expect_ident()?;
+        }
+        Ok(name)
+    }
+
     fn eat_ident(&mut self) -> Option<String> {
         match self.peek().clone() {
             TokenKind::Ident(s) => { self.advance(); Some(s) }
@@ -268,11 +278,11 @@ impl Parser {
 
     fn parse_impl(&mut self) -> Result<ImplDef> {
         self.skip_generics();
-        // impl [Trait for] Type
-        let first = self.expect_ident()?;
+        // impl [Trait for] Type — trait may be a qualified path like std::fmt::Display
+        let first = self.expect_path_tail()?;
         self.skip_generics(); // skip <T> after type name
         let (type_name, trait_name) = if self.eat(&TokenKind::For) {
-            let ty = self.expect_ident()?;
+            let ty = self.expect_path_tail()?;
             self.skip_generics(); // skip <T> after implementing type name
             (ty, Some(first))
         } else {

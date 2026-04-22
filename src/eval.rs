@@ -1163,12 +1163,44 @@ impl Interpreter {
         match target {
             Expr::Ident(name) => { env.borrow_mut().set(name, val); Ok(()) }
             Expr::Field(base, field) => {
+                // Check if base is an EntryRef — field assignment writes through to the HashMap
+                if let Expr::Ident(name) = base.as_ref() {
+                    let base_raw = env.borrow().get(name);
+                    if let Some(Value::EntryRef { map_name, key }) = base_raw {
+                        let map_val = lookup_entry_map(&map_name, &env)
+                            .ok_or_else(|| err(format!("no map `{}`", map_name)))?;
+                        if let Value::HashMap(mut m) = map_val {
+                            let entry_val = m.get(&key).cloned().unwrap_or(Value::Unit);
+                            let updated = match entry_val {
+                                Value::Tuple(mut t) => {
+                                    let idx: usize = field.parse().unwrap_or(0);
+                                    if idx < t.len() { t[idx] = val; }
+                                    Value::Tuple(t)
+                                }
+                                Value::Struct { type_name, mut fields } => {
+                                    fields.insert(field.clone(), val);
+                                    Value::Struct { type_name, fields }
+                                }
+                                other => other,
+                            };
+                            m.insert(key, updated);
+                            write_back_entry_map(&map_name, Value::HashMap(m), &env);
+                            return Ok(());
+                        }
+                    }
+                }
                 let mut struct_val = self.eval_expr(base, Rc::clone(&env))?;
-                if let Value::Struct { ref mut fields, .. } = struct_val {
-                    fields.insert(field.clone(), val);
-                    self.assign(base, struct_val, env)
-                } else {
-                    Err(err(format!("cannot assign field `{}` on non-struct", field)))
+                match &mut struct_val {
+                    Value::Struct { ref mut fields, .. } => {
+                        fields.insert(field.clone(), val);
+                        self.assign(base, struct_val, env)
+                    }
+                    Value::Tuple(ref mut t) => {
+                        let idx: usize = field.parse().unwrap_or(0);
+                        if idx < t.len() { t[idx] = val; }
+                        self.assign(base, struct_val, env)
+                    }
+                    _ => Err(err(format!("cannot assign field `{}` on non-struct", field))),
                 }
             }
             Expr::Index(base, idx_expr) => {
