@@ -551,7 +551,23 @@ impl Interpreter {
             }
 
             Expr::Unary(op, inner) => {
-                let val = self.eval_expr(inner, env)?;
+                let val = self.eval_expr(inner, Rc::clone(&env))?;
+                // Try operator trait dispatch for user-defined types (Neg, Not)
+                if let Value::Struct { type_name, .. } = &val {
+                    let method = match op {
+                        UnOp::Neg => Some("neg"),
+                        UnOp::Not => Some("not"),
+                    };
+                    if let Some(m) = method {
+                        let tn = type_name.clone();
+                        let has_m = self.impls.get(&tn)
+                            .map(|ms| ms.iter().any(|f| f.name == m))
+                            .unwrap_or(false);
+                        if has_m {
+                            return self.call_method_or_static(&tn, m, Some(val), vec![], env);
+                        }
+                    }
+                }
                 eval_unary(op, val)
             }
 
@@ -573,7 +589,30 @@ impl Interpreter {
                     _ => {}
                 }
                 let l = self.eval_expr(lhs, Rc::clone(&env))?;
-                let r = self.eval_expr(rhs, env)?;
+                let r = self.eval_expr(rhs, Rc::clone(&env))?;
+                // Try operator trait dispatch for user-defined types
+                if let Value::Struct { type_name, .. } = &l {
+                    let trait_method = match op {
+                        BinOp::Add => Some("add"),
+                        BinOp::Sub => Some("sub"),
+                        BinOp::Mul => Some("mul"),
+                        BinOp::Div => Some("div"),
+                        BinOp::Rem => Some("rem"),
+                        BinOp::BitAnd => Some("bitand"),
+                        BinOp::BitOr => Some("bitor"),
+                        BinOp::BitXor => Some("bitxor"),
+                        _ => None,
+                    };
+                    if let Some(method) = trait_method {
+                        let tn = type_name.clone();
+                        let has_method = self.impls.get(&tn)
+                            .map(|ms| ms.iter().any(|m| m.name == method))
+                            .unwrap_or(false);
+                        if has_method {
+                            return self.call_method_or_static(&tn, method, Some(l), vec![r], env);
+                        }
+                    }
+                }
                 eval_binary(op, l, r)
             }
 
