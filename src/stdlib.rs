@@ -1330,15 +1330,13 @@ pub fn call_method(
         // ── Char methods ──────────────────────────────────────────────────────
         (Value::Char(_), "to_uppercase") => {
             if let Value::Char(c) = recv {
-                // Returns an iterator in real Rust; here return a Vec<char> that works as iterator
-                let uppers: Vec<Value> = c.to_uppercase().map(Value::Char).collect();
-                Some(Ok(Value::Vec(uppers)))
+                // Return a String (most common use is .to_string() after)
+                Some(Ok(Value::Str(c.to_uppercase().collect())))
             } else { None }
         }
         (Value::Char(_), "to_lowercase") => {
             if let Value::Char(c) = recv {
-                let lowers: Vec<Value> = c.to_lowercase().map(Value::Char).collect();
-                Some(Ok(Value::Vec(lowers)))
+                Some(Ok(Value::Str(c.to_lowercase().collect())))
             } else { None }
         }
         (Value::Char(_), "is_alphabetic") => {
@@ -1953,6 +1951,23 @@ pub fn call_method(
                 }
             }
             Some(Ok(Value::Bool(true)))
+        }
+        (Value::Range(start, end, inclusive), "partition") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end = if inc { e + 1 } else { e };
+            let func = args.into_iter().next().unwrap_or(Value::Unit);
+            let mut yes = Vec::new();
+            let mut no = Vec::new();
+            if let Value::Fn(cfn) = &func {
+                for n in s..end {
+                    match interp.call_crust_fn(cfn, vec![Value::Int(n)], None) {
+                        Ok(v) if v.is_truthy() => yes.push(Value::Int(n)),
+                        Ok(_) => no.push(Value::Int(n)),
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+            }
+            Some(Ok(Value::Tuple(vec![Value::Vec(yes), Value::Vec(no)])))
         }
         (Value::Range(..), "clone") => Some(Ok(recv)),
 

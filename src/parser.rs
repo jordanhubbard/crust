@@ -1044,6 +1044,7 @@ impl Parser {
                             // tuple destructuring: |(k, v)|
                             let mut names = Vec::new();
                             while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
+                                while self.eat(&TokenKind::And) || self.eat(&TokenKind::AndAnd) {}
                                 self.eat(&TokenKind::Mut);
                                 let n = if self.check(&TokenKind::Underscore) { self.advance(); "_".into() }
                                         else { self.expect_ident()? };
