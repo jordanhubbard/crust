@@ -234,6 +234,10 @@ impl Parser {
             self.eat(&TokenKind::Semi);
             return Ok(StructDef { name, fields });
         }
+        // Unit struct: struct Foo;
+        if self.eat(&TokenKind::Semi) {
+            return Ok(StructDef { name, fields: Vec::new() });
+        }
         self.expect(&TokenKind::LBrace)?;
         let mut fields = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {

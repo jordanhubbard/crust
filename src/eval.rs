@@ -450,6 +450,10 @@ impl Interpreter {
                 if let Some(v) = self.consts.get(name).cloned() {
                     return Ok(v);
                 }
+                // Fall back: unit struct construction (struct Foo; used as Foo)
+                if self.structs.get(name).map_or(false, |s| s.fields.is_empty()) {
+                    return Ok(Value::Struct { type_name: name.to_string(), fields: HashMap::new() });
+                }
                 let hint = if name.chars().next().map_or(false, |c| c.is_uppercase()) {
                     " (if this is an enum variant, make sure it's constructed with `Type::Variant` or `Variant(args)`)"
                 } else { "" };
