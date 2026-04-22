@@ -10,6 +10,15 @@ fn err(msg: impl Into<String>) -> Signal {
     Signal::Err(CrustError::runtime(msg))
 }
 
+fn ordering_val(ord: std::cmp::Ordering) -> Value {
+    let variant = match ord {
+        std::cmp::Ordering::Less    => "Less",
+        std::cmp::Ordering::Equal   => "Equal",
+        std::cmp::Ordering::Greater => "Greater",
+    };
+    Value::Enum { type_name: "Ordering".to_string(), variant: variant.to_string(), inner: None }
+}
+
 // ── Mutating methods (return value + updated receiver) ───────────────────────
 
 pub fn call_method_mut(
@@ -1371,16 +1380,16 @@ pub fn call_method(
                 }
             } else { None }
         }
-        (Value::Str(_), "cmp" | "partial_cmp") => {
+        (Value::Str(_), "cmp") => {
             if let Value::Str(s) = recv {
                 let other = match args.into_iter().next() { Some(Value::Str(x)) => x, Some(v) => v.to_string(), _ => return None };
-                let ord = s.cmp(&other);
-                let v = match ord {
-                    std::cmp::Ordering::Less => Value::Int(-1),
-                    std::cmp::Ordering::Equal => Value::Int(0),
-                    std::cmp::Ordering::Greater => Value::Int(1),
-                };
-                Some(Ok(v))
+                Some(Ok(ordering_val(s.cmp(&other))))
+            } else { None }
+        }
+        (Value::Str(_), "partial_cmp") => {
+            if let Value::Str(s) = recv {
+                let other = match args.into_iter().next() { Some(Value::Str(x)) => x, Some(v) => v.to_string(), _ => return None };
+                Some(Ok(Value::Option_(Some(Box::new(ordering_val(s.cmp(&other)))))))
             } else { None }
         }
         (Value::Str(_), "to_string" | "clone") => Some(Ok(recv)),
@@ -1647,12 +1656,8 @@ pub fn call_method(
                     Some(Value::Int(x)) => x as f64,
                     _ => return None,
                 };
-                let v = match f.partial_cmp(&other) {
-                    Some(std::cmp::Ordering::Less) => Value::Int(-1),
-                    Some(std::cmp::Ordering::Equal) => Value::Int(0),
-                    _ => Value::Int(1),
-                };
-                Some(Ok(Value::Option_(Some(Box::new(v)))))
+                let ord_opt = f.partial_cmp(&other).map(|o| Box::new(ordering_val(o)));
+                Some(Ok(Value::Option_(ord_opt)))
             } else { None }
         }
 
@@ -1691,51 +1696,39 @@ pub fn call_method(
                 Some(Ok(Value::Int(n.clamp(lo, hi))))
             } else { None }
         }
-        (Value::Int(_), "cmp") => {
+        (Value::Int(_), "cmp" | "partial_cmp") => {
             if let Value::Int(n) = recv {
-                let other = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
-                let v = match n.cmp(&other) {
-                    std::cmp::Ordering::Less => Value::Int(-1),
-                    std::cmp::Ordering::Equal => Value::Int(0),
-                    std::cmp::Ordering::Greater => Value::Int(1),
-                };
-                Some(Ok(v))
-            } else { None }
-        }
-        // Ordering::then / then_with — self if non-zero (non-Equal), else other
-        (Value::Int(_), "then") => {
-            if let Value::Int(n) = recv {
-                if n != 0 {
-                    Some(Ok(Value::Int(n)))
+                let other = match args.into_iter().next() { Some(Value::Int(x)) => x, Some(Value::Float(x)) => x as i64, _ => return None };
+                let ord = ordering_val(n.cmp(&other));
+                if method == "partial_cmp" {
+                    Some(Ok(Value::Option_(Some(Box::new(ord)))))
                 } else {
-                    Some(Ok(args.into_iter().next().unwrap_or(Value::Int(0))))
+                    Some(Ok(ord))
                 }
             } else { None }
         }
-        (Value::Int(_), "then_with") => {
-            if let Value::Int(n) = recv {
-                if n != 0 {
-                    Some(Ok(Value::Int(n)))
-                } else {
-                    let func = args.into_iter().next().unwrap_or(Value::Unit);
-                    if let Value::Fn(cfn) = func {
-                        Some(interp.call_crust_fn(&cfn, vec![], None))
-                    } else {
-                        Some(Ok(func))
-                    }
-                }
-            } else { None }
+        // Ordering::then / then_with — self if non-Equal, else other
+        (Value::Enum { .. }, "then") => {
+            let is_equal = matches!(&recv, Value::Enum { variant, .. } if variant == "Equal");
+            if is_equal {
+                Some(Ok(args.into_iter().next().unwrap_or(recv)))
+            } else {
+                let _ = args; // consume
+                Some(Ok(recv))
+            }
         }
-        (Value::Int(_), "partial_cmp") => {
-            if let Value::Int(n) = recv {
-                let other = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
-                let v = match n.cmp(&other) {
-                    std::cmp::Ordering::Less => Value::Int(-1),
-                    std::cmp::Ordering::Equal => Value::Int(0),
-                    std::cmp::Ordering::Greater => Value::Int(1),
-                };
-                Some(Ok(Value::Option_(Some(Box::new(v)))))
-            } else { None }
+        (Value::Enum { .. }, "then_with") => {
+            let is_equal = matches!(&recv, Value::Enum { variant, .. } if variant == "Equal");
+            if is_equal {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                match call_value_as_fn(&func, vec![], interp) {
+                    Ok(v) => Some(Ok(v)),
+                    Err(e) => Some(Err(e)),
+                }
+            } else {
+                let _ = args;
+                Some(Ok(recv))
+            }
         }
         (Value::Int(_), "rem_euclid") => {
             if let Value::Int(n) = recv {
