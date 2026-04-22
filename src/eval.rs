@@ -1219,6 +1219,27 @@ impl Interpreter {
                 }
             }
         }
+        // Pre-resolve implicit captures: {varname} where varname is not in named and not a number
+        // Scan the format string for {ident} patterns and look them up in the environment
+        {
+            let mut chars = fmt.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '{' {
+                    if chars.peek() == Some(&'{') { chars.next(); continue; }
+                    let mut spec = String::new();
+                    for ch in &mut chars { if ch == '}' { break; } spec.push(ch); }
+                    let ident = if let Some(colon) = spec.find(':') { &spec[..colon] } else { &spec };
+                    if !ident.is_empty() && ident.parse::<usize>().is_err() && !named.contains_key(ident) {
+                        // Check if it's a valid identifier that could be in scope
+                        if ident.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                            if let Some(val) = env.borrow().get(ident) {
+                                named.insert(ident.to_string(), val);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Normalize: expand {name} and {N} into sequential {} with reordered args
         let (resolved_fmt, rest) = normalize_format_args(&fmt, positional, &named);
         // For user types with Display impls, pre-convert on {} specs
