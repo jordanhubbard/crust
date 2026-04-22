@@ -36,6 +36,14 @@ impl Codegen {
             Item::TypeAlias { name, ty } => {
                 format!("type {} = {};\n", name, self.emit_ty(ty))
             }
+            Item::Trait { name, methods } => {
+                let mut out = format!("trait {} {{\n", name);
+                for m in methods {
+                    out.push_str(&format!("    {}", self.emit_fn(m)));
+                }
+                out.push_str("}\n");
+                out
+            }
         }
     }
 

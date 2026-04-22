@@ -130,6 +130,7 @@ impl Parser {
                 self.eat(&TokenKind::Mut);
                 self.parse_const()
             }
+            TokenKind::Trait  => { self.advance(); self.parse_trait() }
             other => Err(CrustError::parse(format!("unexpected token at item level: {:?}", other), self.line())),
         }
     }
@@ -280,6 +281,50 @@ impl Parser {
         }
         self.expect(&TokenKind::RBrace)?;
         Ok(ImplDef { type_name, trait_name, methods })
+    }
+
+    fn parse_trait(&mut self) -> Result<Item> {
+        let name = self.expect_ident()?;
+        self.skip_generics();
+        // optional supertrait bounds: trait Foo: Bar + Baz
+        if self.eat(&TokenKind::Colon) {
+            while !self.check(&TokenKind::LBrace) && !self.check(&TokenKind::Eof) {
+                self.advance();
+            }
+        }
+        self.skip_where();
+        self.expect(&TokenKind::LBrace)?;
+        let mut methods = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
+            self.eat(&TokenKind::Pub);
+            if self.check(&TokenKind::Fn) {
+                self.advance();
+                let fn_name = self.expect_ident()?;
+                self.skip_generics();
+                self.expect(&TokenKind::LParen)?;
+                let params = self.parse_params()?;
+                self.expect(&TokenKind::RParen)?;
+                let ret_ty = if self.eat(&TokenKind::Arrow) { Some(self.parse_ty()?) } else { None };
+                self.skip_where();
+                if self.check(&TokenKind::LBrace) {
+                    // default method body
+                    let body = self.parse_block()?;
+                    methods.push(FnDef { name: fn_name, params, ret_ty, body });
+                } else {
+                    // required method (no body) — skip the semicolon
+                    self.eat(&TokenKind::Semi);
+                }
+            } else if matches!(self.peek(), TokenKind::Const | TokenKind::Type) {
+                while !matches!(self.peek(), TokenKind::Semi | TokenKind::RBrace | TokenKind::Eof) {
+                    self.advance();
+                }
+                self.eat(&TokenKind::Semi);
+            } else {
+                self.advance(); // skip unknown tokens inside trait
+            }
+        }
+        self.expect(&TokenKind::RBrace)?;
+        Ok(Item::Trait { name, methods })
     }
 
     fn parse_use(&mut self) -> Result<Vec<String>> {

@@ -103,6 +103,7 @@ pub struct Interpreter {
     fns: HashMap<String, CrustFn>,
     structs: HashMap<String, StructDef>,
     impls: HashMap<String, Vec<FnDef>>,
+    traits: HashMap<String, Vec<FnDef>>, // default trait methods
     pub output: Vec<String>,
     // Populated by call_crust_fn when a &mut self method modifies self
     pub self_writeback: Option<Value>,
@@ -114,6 +115,7 @@ impl Interpreter {
             fns: HashMap::new(),
             structs: HashMap::new(),
             impls: HashMap::new(),
+            traits: HashMap::new(),
             output: Vec::new(),
             self_writeback: None,
         }
@@ -153,7 +155,21 @@ impl Interpreter {
             }
             Item::Struct(def) => { self.structs.insert(def.name.clone(), def); }
             Item::Enum(_) => {} // enums are constructed by name at runtime
+            Item::Trait { name, methods } => {
+                self.traits.insert(name, methods);
+            }
             Item::Impl(def) => {
+                // If this is `impl TraitName for TypeName`, inject default trait methods
+                // for any method not overridden in this impl block.
+                if let Some(trait_name) = &def.trait_name {
+                    let defaults = self.traits.get(trait_name).cloned().unwrap_or_default();
+                    let override_names: std::collections::HashSet<&str> =
+                        def.methods.iter().map(|m| m.name.as_str()).collect();
+                    let to_add: Vec<FnDef> = defaults.into_iter()
+                        .filter(|m| !override_names.contains(m.name.as_str()))
+                        .collect();
+                    self.impls.entry(def.type_name.clone()).or_default().extend(to_add);
+                }
                 self.impls.entry(def.type_name.clone()).or_default().extend(def.methods);
             }
             Item::Use(_) | Item::Const { .. } | Item::TypeAlias { .. } => {}

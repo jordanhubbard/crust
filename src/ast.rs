@@ -105,6 +105,7 @@ pub enum Item {
     Struct(StructDef),
     Enum(EnumDef),
     Impl(ImplDef),
+    Trait { name: String, methods: Vec<FnDef> },
     Use(Vec<String>),
     Const { name: String, ty: Ty, value: Expr },
     TypeAlias { name: String, ty: Ty },
