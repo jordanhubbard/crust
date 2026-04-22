@@ -468,6 +468,15 @@ pub fn call_method(
                 Some(Ok(Value::Option_(v.into_iter().nth(idx).map(Box::new))))
             } else { None }
         }
+        (Value::Vec(_), "nth") => {
+            if let Value::Vec(v) = recv {
+                let idx = match args.into_iter().next() {
+                    Some(Value::Int(i)) => i as usize,
+                    _ => return Some(Ok(Value::Option_(None))),
+                };
+                Some(Ok(Value::Option_(v.into_iter().nth(idx).map(Box::new))))
+            } else { None }
+        }
         (Value::Vec(_), "iter" | "into_iter" | "iter_mut") => {
             // At Level 0, iterators are just the vec itself
             Some(Ok(recv))

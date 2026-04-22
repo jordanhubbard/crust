@@ -76,6 +76,7 @@ pub enum Pat {
     Or(Vec<Pat>),
     Range(Lit, Lit, bool),
     Ref(Box<Pat>),
+    Bind { name: String, pat: Box<Pat> },  // name @ pat
 }
 
 #[derive(Debug, Clone)]

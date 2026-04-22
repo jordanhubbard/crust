@@ -60,6 +60,10 @@ fn bind_pat(pat: &Pat, val: Value, env: &Rc<RefCell<Env>>) {
                 }
             }
         }
+        Pat::Bind { name, pat } => {
+            env.borrow_mut().define(name, val.clone());
+            bind_pat(pat, val, env);
+        }
         _ => {}
     }
 }
@@ -1143,6 +1147,14 @@ impl Interpreter {
                 let mut tmp = Env::child(Rc::new(RefCell::new(env.clone())));
                 self.match_pat(p, val, &mut tmp)
             }),
+            (Pat::Bind { name, pat }, _) => {
+                if self.match_pat(pat, val, env) {
+                    env.set(name, val.clone());
+                    true
+                } else {
+                    false
+                }
+            }
             (Pat::Range(lo, hi, inc), Value::Int(n)) => {
                 let lo_n = match eval_lit(lo) { Value::Int(n) => n, _ => return false };
                 let hi_n = match eval_lit(hi) { Value::Int(n) => n, _ => return false };

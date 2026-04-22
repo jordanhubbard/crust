@@ -1289,6 +1289,11 @@ impl Parser {
             }
             TokenKind::Ident(name) => {
                 let name = { self.advance(); name };
+                // @ binding: name @ pattern
+                if self.eat(&TokenKind::At) {
+                    let sub = self.parse_pat_single()?;
+                    return Ok(Pat::Bind { name, pat: Box::new(sub) });
+                }
                 // path: Some(x), None, MyEnum::Variant
                 let mut path = vec![name.clone()];
                 while self.eat(&TokenKind::ColonColon) {

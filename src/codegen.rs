@@ -399,5 +399,6 @@ fn emit_pat(pat: &Pat) -> String {
             else { format!("{}..{}", emit_lit(lo), emit_lit(hi)) }
         }
         Pat::Ref(inner) => format!("&{}", emit_pat(inner)),
+        Pat::Bind { name, pat } => format!("{} @ {}", name, emit_pat(pat)),
     }
 }
