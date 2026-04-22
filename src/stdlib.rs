@@ -1503,14 +1503,19 @@ pub fn call_method(
         // ── Char methods ──────────────────────────────────────────────────────
         (Value::Char(_), "to_uppercase") => {
             if let Value::Char(c) = recv {
-                // Return a String (most common use is .to_string() after)
                 Some(Ok(Value::Str(c.to_uppercase().collect())))
             } else { None }
+        }
+        (Value::Char(_), "to_ascii_uppercase") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Char(c.to_ascii_uppercase()))) } else { None }
         }
         (Value::Char(_), "to_lowercase") => {
             if let Value::Char(c) = recv {
                 Some(Ok(Value::Str(c.to_lowercase().collect())))
             } else { None }
+        }
+        (Value::Char(_), "to_ascii_lowercase") => {
+            if let Value::Char(c) = recv { Some(Ok(Value::Char(c.to_ascii_lowercase()))) } else { None }
         }
         (Value::Char(_), "is_alphabetic") => {
             if let Value::Char(c) = recv { Some(Ok(Value::Bool(c.is_alphabetic()))) } else { None }

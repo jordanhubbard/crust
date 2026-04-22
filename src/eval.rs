@@ -1481,17 +1481,40 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
-fn bind_pattern_simple(pat: &str, val: Value, env: &mut Env) {
-    if pat.starts_with('(') {
-        // tuple pattern: (a,b,c)
-        let inner = &pat[1..pat.len()-1];
-        let names: Vec<&str> = inner.split(',').collect();
-        if let Value::Tuple(vals) = val {
-            for (name, v) in names.iter().zip(vals.into_iter()) {
-                env.define(name.trim(), v);
+fn split_pat_parts(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(s[start..i].trim());
+                start = i + 1;
             }
+            _ => {}
         }
-    } else if pat != "_" {
+    }
+    parts.push(s[start..].trim());
+    parts
+}
+
+fn bind_pattern_simple(pat: &str, val: Value, env: &mut Env) {
+    let pat = pat.trim();
+    if pat.starts_with('(') && pat.ends_with(')') {
+        // nested tuple pattern: (a, (b, c), d)
+        let inner = &pat[1..pat.len()-1];
+        let parts = split_pat_parts(inner);
+        let vals: Vec<Value> = match val {
+            Value::Tuple(v) => v,
+            Value::Vec(v) => v,
+            other => vec![other],
+        };
+        for (part, v) in parts.iter().zip(vals.into_iter()) {
+            bind_pattern_simple(part, v, env);
+        }
+    } else if pat != "_" && pat != ".." {
         env.define(pat, val);
     }
 }
