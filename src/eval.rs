@@ -67,6 +67,18 @@ fn bind_pat(pat: &Pat, val: Value, env: &Rc<RefCell<Env>>) {
 // Coerce a value to match a declared type annotation (Vec↔HashMap conversions only)
 fn coerce_by_ty(val: Value, ty: Option<&Ty>) -> Value {
     match ty {
+        Some(Ty::Named(name)) if name == "String" || name == "str" => {
+            // String/str annotation: if we got a Vec<char>, join into String
+            if let Value::Vec(ref v) = val {
+                if v.iter().all(|x| matches!(x, Value::Char(_))) {
+                    if let Value::Vec(v) = val {
+                        let s: String = v.iter().filter_map(|c| if let Value::Char(ch) = c { Some(*ch) } else { None }).collect();
+                        return Value::Str(s);
+                    }
+                }
+            }
+            val
+        }
         Some(Ty::Generic(name, _)) if name == "Vec" => {
             // Vec annotation: if we got a HashMap, convert to Vec<(k, v)>
             if let Value::HashMap(m) = val {

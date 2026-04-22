@@ -298,8 +298,16 @@ impl Lexer {
 
                 c if c.is_alphabetic() || c == '_' => {
                     let s = self.read_ident(c);
+                    // b'A' byte literal → Int(65)
+                    if s == "b" && self.peek() == Some('\'') {
+                        self.advance(); // consume '
+                        let ch = self.read_char_lit()?;
+                        TokenKind::Int(ch as i64)
+                    // b"..." byte string literal → treat as regular string
+                    } else if s == "b" && self.peek() == Some('"') {
+                        TokenKind::Str(self.read_string()?)
                     // Check for macro invocation: ident!(  ident![  ident!{
-                    if self.peek() == Some('!')
+                    } else if self.peek() == Some('!')
                         && matches!(self.peek2(), Some('(' | '[' | '{'))
                     {
                         self.advance(); // consume !
