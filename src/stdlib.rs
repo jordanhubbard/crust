@@ -362,6 +362,18 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
         // Numeric constants
         "std::i64::MIN" | "i64::MIN" => Some(Ok(Value::Int(i64::MIN))),
         "std::i64::MAX" | "i64::MAX" => Some(Ok(Value::Int(i64::MAX))),
+        "std::i32::MIN" | "i32::MIN" => Some(Ok(Value::Int(i32::MIN as i64))),
+        "std::i32::MAX" | "i32::MAX" => Some(Ok(Value::Int(i32::MAX as i64))),
+        "std::u64::MAX" | "u64::MAX" => Some(Ok(Value::Int(i64::MAX))), // approximate; crust uses i64
+        "std::u64::MIN" | "u64::MIN" => Some(Ok(Value::Int(0))),
+        "std::u32::MAX" | "u32::MAX" => Some(Ok(Value::Int(u32::MAX as i64))),
+        "std::u32::MIN" | "u32::MIN" => Some(Ok(Value::Int(0))),
+        "std::u8::MAX"  | "u8::MAX"  => Some(Ok(Value::Int(255))),
+        "std::u8::MIN"  | "u8::MIN"  => Some(Ok(Value::Int(0))),
+        "std::i8::MAX"  | "i8::MAX"  => Some(Ok(Value::Int(127))),
+        "std::i8::MIN"  | "i8::MIN"  => Some(Ok(Value::Int(-128))),
+        "std::usize::MAX" | "usize::MAX" => Some(Ok(Value::Int(i64::MAX))),
+        "std::usize::MIN" | "usize::MIN" => Some(Ok(Value::Int(0))),
 
         // Radix parsing: i64::from_str_radix("ff", 16) -> Ok(255)
         "i64::from_str_radix" | "i32::from_str_radix" | "u64::from_str_radix" | "u32::from_str_radix" |
@@ -425,11 +437,6 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
         "f64::PI" | "std::f64::consts::PI" => Some(Ok(Value::Float(std::f64::consts::PI))),
         "f64::E" | "std::f64::consts::E" => Some(Ok(Value::Float(std::f64::consts::E))),
 
-        // usize/u32 constants
-        "usize::MAX" => Some(Ok(Value::Int(usize::MAX as i64))),
-        "u32::MAX" => Some(Ok(Value::Int(u32::MAX as i64))),
-        "i32::MAX" => Some(Ok(Value::Int(i32::MAX as i64))),
-        "i32::MIN" => Some(Ok(Value::Int(i32::MIN as i64))),
 
         _ => None,
     }
