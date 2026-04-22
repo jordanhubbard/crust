@@ -851,6 +851,50 @@ pub fn call_method(
                 Some(Ok(Value::Option_(best.map(|(_, v)| Box::new(v)))))
             } else { None }
         }
+        (Value::Vec(_), "max_by") => {
+            if let Value::Vec(v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                let mut best: Option<Value> = None;
+                if let Value::Fn(cfn) = &func {
+                    for item in v {
+                        let replace = match &best {
+                            None => true,
+                            Some(b) => {
+                                match interp.call_crust_fn(cfn, vec![item.clone(), b.clone()], None) {
+                                    Ok(Value::Int(n)) if n > 0 => true,
+                                    Ok(_) => false,
+                                    Err(e) => return Some(Err(e)),
+                                }
+                            }
+                        };
+                        if replace { best = Some(item); }
+                    }
+                }
+                Some(Ok(Value::Option_(best.map(Box::new))))
+            } else { None }
+        }
+        (Value::Vec(_), "min_by") => {
+            if let Value::Vec(v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                let mut best: Option<Value> = None;
+                if let Value::Fn(cfn) = &func {
+                    for item in v {
+                        let replace = match &best {
+                            None => true,
+                            Some(b) => {
+                                match interp.call_crust_fn(cfn, vec![item.clone(), b.clone()], None) {
+                                    Ok(Value::Int(n)) if n < 0 => true,
+                                    Ok(_) => false,
+                                    Err(e) => return Some(Err(e)),
+                                }
+                            }
+                        };
+                        if replace { best = Some(item); }
+                    }
+                }
+                Some(Ok(Value::Option_(best.map(Box::new))))
+            } else { None }
+        }
         (Value::Vec(_), "max_by_key") => {
             if let Value::Vec(v) = recv {
                 let func = args.into_iter().next().unwrap_or(Value::Unit);
@@ -1261,6 +1305,22 @@ pub fn call_method(
             } else { None }
         }
 
+        (Value::Float(_), "partial_cmp" | "total_cmp") => {
+            if let Value::Float(f) = recv {
+                let other = match args.into_iter().next() {
+                    Some(Value::Float(x)) => x,
+                    Some(Value::Int(x)) => x as f64,
+                    _ => return None,
+                };
+                let v = match f.partial_cmp(&other) {
+                    Some(std::cmp::Ordering::Less) => Value::Int(-1),
+                    Some(std::cmp::Ordering::Equal) => Value::Int(0),
+                    _ => Value::Int(1),
+                };
+                Some(Ok(Value::Option_(Some(Box::new(v)))))
+            } else { None }
+        }
+
         // ── Integer methods ───────────────────────────────────────────────────
         (Value::Int(_), "abs") => {
             if let Value::Int(n) = recv { Some(Ok(Value::Int(n.abs()))) } else { None }
@@ -1293,16 +1353,26 @@ pub fn call_method(
                 Some(Ok(Value::Int(n.clamp(lo, hi))))
             } else { None }
         }
-        (Value::Int(_), "cmp" | "partial_cmp") => {
+        (Value::Int(_), "cmp") => {
             if let Value::Int(n) = recv {
                 let other = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
-                let ord = n.cmp(&other);
-                let v = match ord {
+                let v = match n.cmp(&other) {
                     std::cmp::Ordering::Less => Value::Int(-1),
                     std::cmp::Ordering::Equal => Value::Int(0),
                     std::cmp::Ordering::Greater => Value::Int(1),
                 };
                 Some(Ok(v))
+            } else { None }
+        }
+        (Value::Int(_), "partial_cmp") => {
+            if let Value::Int(n) = recv {
+                let other = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                let v = match n.cmp(&other) {
+                    std::cmp::Ordering::Less => Value::Int(-1),
+                    std::cmp::Ordering::Equal => Value::Int(0),
+                    std::cmp::Ordering::Greater => Value::Int(1),
+                };
+                Some(Ok(Value::Option_(Some(Box::new(v)))))
             } else { None }
         }
         (Value::Int(_), "rem_euclid") => {
