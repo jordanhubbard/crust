@@ -176,9 +176,16 @@ impl Value {
             }
             Value::Struct { type_name, fields } => {
                 let mut pairs: Vec<_> = fields.iter().collect();
-                pairs.sort_by_key(|(k, _)| *k);
-                let parts: Vec<String> = pairs.iter().map(|(k, v)| format!("{}: {}", k, v.debug_repr())).collect();
-                format!("{} {{ {} }}", type_name, parts.join(", "))
+                pairs.sort_by_key(|(k, _)| k.parse::<usize>().unwrap_or(usize::MAX));
+                // Tuple struct: all fields are numeric keys → TypeName(v0, v1, ...)
+                let is_tuple = !pairs.is_empty() && pairs.iter().all(|(k, _)| k.parse::<usize>().is_ok());
+                if is_tuple {
+                    let parts: Vec<String> = pairs.iter().map(|(_, v)| v.debug_repr()).collect();
+                    format!("{}({})", type_name, parts.join(", "))
+                } else {
+                    let parts: Vec<String> = pairs.iter().map(|(k, v)| format!("{}: {}", k, v.debug_repr())).collect();
+                    format!("{} {{ {} }}", type_name, parts.join(", "))
+                }
             }
             other => other.to_string(),
         }
