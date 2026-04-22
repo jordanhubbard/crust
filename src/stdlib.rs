@@ -595,6 +595,18 @@ pub fn call_method(
                 Some(Ok(Value::Unit))
             } else { None }
         }
+        // inspect: call closure for side-effects, return self unchanged
+        (Value::Vec(_), "inspect") => {
+            if let Value::Vec(ref v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                if let Value::Fn(cfn) = &func {
+                    for item in v {
+                        let _ = interp.call_crust_fn(cfn, vec![item.clone()], None);
+                    }
+                }
+            }
+            Some(Ok(recv))
+        }
         (Value::Vec(_), "filter") => {
             if let Value::Vec(v) = recv {
                 let func = args.into_iter().next().unwrap_or(Value::Unit);
@@ -1845,6 +1857,20 @@ pub fn call_method(
         (Value::Option_(_), "replace") => {
             // replace(new) -> old value; at Level 0 returns old, mutation not tracked
             Some(Ok(recv))
+        }
+        (Value::Option_(_), "iter") => {
+            match recv {
+                Value::Option_(None) => Some(Ok(Value::Vec(vec![]))),
+                Value::Option_(Some(v)) => Some(Ok(Value::Vec(vec![*v]))),
+                _ => None,
+            }
+        }
+        (Value::Option_(_), "into_iter") => {
+            match recv {
+                Value::Option_(None) => Some(Ok(Value::Vec(vec![]))),
+                Value::Option_(Some(v)) => Some(Ok(Value::Vec(vec![*v]))),
+                _ => None,
+            }
         }
         (Value::Option_(_), "as_ref" | "as_deref") => {
             Some(Ok(recv)) // at Level 0, ref = value
