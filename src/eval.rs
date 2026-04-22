@@ -1593,6 +1593,95 @@ impl Interpreter {
             return r;
         }
 
+        // 2b. If calling an iterator method on a struct that impl Iterator (has `next` method),
+        //     drain it to a Vec first, then apply the method to the Vec.
+        let iterator_consumer_methods = ["collect", "sum", "product", "count", "for_each",
+            "any", "all", "min", "max", "min_by", "max_by", "min_by_key", "max_by_key",
+            "last", "nth", "find", "position", "fold", "reduce", "map", "filter",
+            "filter_map", "flat_map", "flatten", "enumerate", "zip", "take", "skip",
+            "take_while", "skip_while", "chain", "peekable", "cloned", "copied",
+            "inspect", "scan", "cycle", "step_by", "unzip", "partition",
+        ];
+        if let Some(self_struct) = &self_val {
+            if let Value::Struct { type_name: stn, .. } = self_struct {
+                let has_next = self.impls.get(stn)
+                    .map(|ms| ms.iter().any(|m| m.name == "next"))
+                    .unwrap_or(false);
+                if has_next && iterator_consumer_methods.contains(&method) {
+                    // For `take(n)`, drain at most n items; for others, drain all (finite iterators)
+                    let max_items: usize = if method == "take" {
+                        match args.first() {
+                            Some(Value::Int(n)) => *n as usize,
+                            _ => 100_000,
+                        }
+                    } else {
+                        100_000
+                    };
+                    // Drain the custom iterator into a Vec using next() with self write-back
+                    let stn_clone = stn.clone();
+                    let mut items = Vec::new();
+                    let mut iter_val = self_struct.clone();
+                    loop {
+                        if items.len() >= max_items { break; }
+                        self.self_writeback = None;
+                        let next_result = self.call_method_or_static(&stn_clone, "next", Some(iter_val.clone()), vec![], Rc::clone(&env));
+                        // Propagate mutated self state (e.g. self.count += 1 in next())
+                        if let Some(wb) = self.self_writeback.take() {
+                            iter_val = wb;
+                        }
+                        match next_result {
+                            Ok(Value::Option_(None)) => break,
+                            Ok(Value::Option_(Some(v))) => items.push(*v),
+                            Ok(other) => {
+                                if matches!(other, Value::Unit) { break; }
+                                items.push(other);
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    let first_len = items.len();
+                    let vec_val = Value::Vec(items);
+                    // For `take`, just return the Vec directly
+                    if method == "take" { return Ok(vec_val); }
+                    // For `zip`, if the arg is also a custom iterator struct, drain it too
+                    let resolved_args = if method == "zip" {
+                        let mut resolved = Vec::new();
+                        for arg in args {
+                            if let Value::Struct { type_name: arg_stn, .. } = &arg {
+                                let arg_has_next = self.impls.get(arg_stn)
+                                    .map(|ms| ms.iter().any(|m| m.name == "next"))
+                                    .unwrap_or(false);
+                                if arg_has_next {
+                                    let arg_stn_clone = arg_stn.clone();
+                                    let mut arg_items = Vec::new();
+                                    let mut arg_iter = arg.clone();
+                                    let zip_limit = first_len; // match first iterator's length
+                                    loop {
+                                        if arg_items.len() >= zip_limit { break; }
+                                        self.self_writeback = None;
+                                        let r = self.call_method_or_static(&arg_stn_clone, "next", Some(arg_iter.clone()), vec![], Rc::clone(&env));
+                                        if let Some(wb) = self.self_writeback.take() { arg_iter = wb; }
+                                        match r {
+                                            Ok(Value::Option_(None)) => break,
+                                            Ok(Value::Option_(Some(v))) => arg_items.push(*v),
+                                            Ok(other) => { if matches!(other, Value::Unit) { break; } arg_items.push(other); }
+                                            Err(e) => return Err(e),
+                                        }
+                                    }
+                                    resolved.push(Value::Vec(arg_items));
+                                    continue;
+                                }
+                            }
+                            resolved.push(arg);
+                        }
+                        resolved
+                    } else { args };
+                    return crate::stdlib::call_method("Vec", method, Some(vec_val), resolved_args, self)
+                        .unwrap_or_else(|| Err(err(format!("no iterator method `{}` on Vec", method))));
+                }
+            }
+        }
+
         // 3. Built-in free functions registered as "Type::method" (e.g. Vec::new, HashMap::new)
         let qualified = format!("{}::{}", type_name, method);
         if let Some(r) = crate::stdlib::call_builtin(&qualified, args.clone(), self) {
