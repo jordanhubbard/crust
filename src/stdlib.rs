@@ -1462,6 +1462,15 @@ pub fn call_method(
         (Value::Float(_), "is_finite") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Bool(f.is_finite()))) } else { None }
         }
+        (Value::Float(_), "is_infinite") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Bool(f.is_infinite()))) } else { None }
+        }
+        (Value::Float(_), "is_sign_positive") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Bool(f.is_sign_positive()))) } else { None }
+        }
+        (Value::Float(_), "is_sign_negative") => {
+            if let Value::Float(f) = recv { Some(Ok(Value::Bool(f.is_sign_negative()))) } else { None }
+        }
         (Value::Float(_), "to_string") => {
             if let Value::Float(f) = recv { Some(Ok(Value::Str(f.to_string()))) } else { None }
         }
