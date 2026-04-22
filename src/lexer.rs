@@ -118,7 +118,8 @@ impl Lexer {
         let mut s = String::new();
         loop {
             match self.advance() {
-                None | Some('\n') => return Err(CrustError::parse("unterminated string", line)),
+                None => return Err(CrustError::parse("unterminated string", line)),
+                Some('\n') => { self.line += 1; s.push('\n'); }
                 Some('"') => break,
                 Some('\\') => s.push(self.read_escape(line)?),
                 Some(c) => s.push(c),

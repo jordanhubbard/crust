@@ -2277,27 +2277,47 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
                     if fmt_spec == "?" || fmt_spec == "#?" {
                         result.push_str(&val.debug_repr());
                     } else if let Some(align_pos) = fmt_spec.find(['>', '<', '^']) {
-                        // fill+align: e.g. ">10", "0>5", "<10", "^10"
+                        // fill+align: e.g. ">10", "0>5", "<10", "^10", ">8.2"
                         let fill = if align_pos > 0 { fmt_spec.chars().next().unwrap_or(' ') } else { ' ' };
                         let align = fmt_spec.chars().nth(align_pos).unwrap_or('>');
-                        let w: usize = fmt_spec[align_pos+1..].parse().unwrap_or(0);
-                        let s = val.to_string();
-                        let len = s.chars().count();
-                        let pad = w.saturating_sub(len);
-                        let fill_str: String = std::iter::repeat(fill).take(pad).collect();
-                        let formatted = match align {
-                            '>' => format!("{}{}", fill_str, s),
-                            '<' => format!("{}{}", s, fill_str),
-                            '^' => {
-                                let left = pad / 2;
-                                let right = pad - left;
-                                let fl: String = std::iter::repeat(fill).take(left).collect();
-                                let fr: String = std::iter::repeat(fill).take(right).collect();
-                                format!("{}{}{}", fl, s, fr)
+                        let after_align = &fmt_spec[align_pos+1..];
+                        // Check for width.precision after align char
+                        let s = if let Some(dot) = after_align.find('.') {
+                            let w: usize = after_align[..dot].parse().unwrap_or(0);
+                            let prec: usize = after_align[dot+1..].trim_end_matches(|c: char| !c.is_numeric()).parse().unwrap_or(6);
+                            let base = match val {
+                                Value::Float(f) => format!("{:.prec$}", f, prec = prec),
+                                Value::Int(n) => format!("{:.prec$}", *n as f64, prec = prec),
+                                other => other.to_string(),
+                            };
+                            let len = base.chars().count();
+                            let pad = w.saturating_sub(len);
+                            let fill_str: String = std::iter::repeat(fill).take(pad).collect();
+                            match align {
+                                '>' => format!("{}{}", fill_str, base),
+                                '<' => format!("{}{}", base, fill_str),
+                                _ => base,
                             }
-                            _ => s,
+                        } else {
+                            let w: usize = after_align.parse().unwrap_or(0);
+                            let s = val.to_string();
+                            let len = s.chars().count();
+                            let pad = w.saturating_sub(len);
+                            let fill_str: String = std::iter::repeat(fill).take(pad).collect();
+                            match align {
+                                '>' => format!("{}{}", fill_str, s),
+                                '<' => format!("{}{}", s, fill_str),
+                                '^' => {
+                                    let left = pad / 2;
+                                    let right = pad - left;
+                                    let fl: String = std::iter::repeat(fill).take(left).collect();
+                                    let fr: String = std::iter::repeat(fill).take(right).collect();
+                                    format!("{}{}{}", fl, s, fr)
+                                }
+                                _ => s,
+                            }
                         };
-                        result.push_str(&formatted);
+                        result.push_str(&s);
                     } else if fmt_spec.contains('.') && !fmt_spec.starts_with('.') {
                         // width.precision: {:10.3} or {:10.3} — parse both
                         let dot = fmt_spec.find('.').unwrap();
