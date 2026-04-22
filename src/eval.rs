@@ -565,6 +565,8 @@ impl Interpreter {
                 let method_str: String = if method == "collect" {
                     match turbofish.as_deref() {
                         Some("String") => "collect_string".to_string(),
+                        Some(t) if t.contains("HashSet") => "collect_hashset".to_string(),
+                        Some(t) if t.contains("HashMap") => "collect_hashmap".to_string(),
                         _ => method.clone(),
                     }
                 } else { method.clone() };

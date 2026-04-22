@@ -678,6 +678,21 @@ pub fn call_method(
             }
             Some(Ok(recv))
         }
+        // collect::<HashSet<_>>() — deduplicate Vec
+        (Value::Vec(_), "collect_hashset") => {
+            if let Value::Vec(v) = recv {
+                let mut seen: Vec<String> = Vec::new();
+                let mut result = Vec::new();
+                for item in v {
+                    let key = item.to_string();
+                    if !seen.contains(&key) {
+                        seen.push(key);
+                        result.push(item);
+                    }
+                }
+                Some(Ok(Value::Vec(result)))
+            } else { None }
+        }
         (Value::Vec(_), "collect_string" | "as_str") => {
             // collect::<String>() or as_str() — join chars/strings into a String
             if let Value::Vec(v) = recv {

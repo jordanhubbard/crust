@@ -734,16 +734,25 @@ impl Parser {
                         }
                         _ => {
                             let field = self.expect_ident()?;
-                            // turbofish: expr.method::<T>(args) — capture the first type name
+                            // turbofish: expr.method::<T>(args) — capture the full type path
                             let turbofish = if self.check(&TokenKind::ColonColon) {
                                 self.advance();
                                 if self.check(&TokenKind::Lt) {
                                     self.advance(); // consume <
-                                    let ty_name = match self.peek().clone() {
+                                    // Collect path segments (Ident::Ident::Ident) as the type name
+                                    let mut ty_name = match self.peek().clone() {
                                         TokenKind::Ident(s) => { self.advance(); s }
                                         _ => "_".to_string(),
                                     };
-                                    // skip rest of the generic args
+                                    // Follow :: path segments
+                                    while self.check(&TokenKind::ColonColon) {
+                                        self.advance();
+                                        match self.peek().clone() {
+                                            TokenKind::Ident(s) => { self.advance(); ty_name = s; }
+                                            _ => break,
+                                        }
+                                    }
+                                    // skip rest of the generic args until closing >
                                     let mut depth = 1i32;
                                     loop {
                                         match self.peek() {
