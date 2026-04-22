@@ -450,6 +450,28 @@ pub fn call_method(
                 Some(Ok(Value::Vec(result)))
             } else { None }
         }
+        (Value::Vec(_), "filter_map") => {
+            if let Value::Vec(v) = recv {
+                let func = args.into_iter().next().unwrap_or(Value::Unit);
+                let mut result = Vec::new();
+                for item in v {
+                    let mapped = match &func {
+                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![item], None) {
+                            Ok(v) => v,
+                            Err(e) => return Some(Err(e)),
+                        },
+                        _ => item,
+                    };
+                    match mapped {
+                        Value::Option_(Some(inner)) => result.push(*inner),
+                        Value::Option_(None) => {}
+                        other if !matches!(other, Value::Unit) => result.push(other),
+                        _ => {}
+                    }
+                }
+                Some(Ok(Value::Vec(result)))
+            } else { None }
+        }
         (Value::Vec(_), "fold" | "reduce") => {
             if let Value::Vec(v) = recv {
                 let mut arg_iter = args.into_iter();
@@ -1208,6 +1230,83 @@ pub fn call_method(
                 _ => None,
             }
         }
+        (Value::Option_(_), "filter") => {
+            match recv {
+                Value::Option_(None) => Some(Ok(Value::Option_(None))),
+                Value::Option_(Some(v)) => {
+                    let func = args.into_iter().next().unwrap_or(Value::Unit);
+                    let keep = match &func {
+                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![*v.clone()], None) {
+                            Ok(r) => r.is_truthy(),
+                            Err(e) => return Some(Err(e)),
+                        },
+                        _ => true,
+                    };
+                    if keep { Some(Ok(Value::Option_(Some(v)))) }
+                    else { Some(Ok(Value::Option_(None))) }
+                }
+                _ => None,
+            }
+        }
+        (Value::Option_(_), "flatten") => {
+            match recv {
+                Value::Option_(None) => Some(Ok(Value::Option_(None))),
+                Value::Option_(Some(inner)) => Some(Ok(*inner)),
+                other => Some(Ok(other)),
+            }
+        }
+        (Value::Option_(_), "unwrap_or_default") => {
+            match recv {
+                Value::Option_(Some(v)) => Some(Ok(*v)),
+                Value::Option_(None) => Some(Ok(Value::Int(0))),
+                other => Some(Ok(other)),
+            }
+        }
+        (Value::Option_(_), "or") => {
+            match recv {
+                Value::Option_(Some(_)) => Some(Ok(recv)),
+                Value::Option_(None) => Some(Ok(args.into_iter().next().unwrap_or(Value::Option_(None)))),
+                other => Some(Ok(other)),
+            }
+        }
+        (Value::Option_(_), "or_else") => {
+            match recv {
+                Value::Option_(Some(_)) => Some(Ok(recv)),
+                Value::Option_(None) => {
+                    let func = args.into_iter().next().unwrap_or(Value::Unit);
+                    if let Value::Fn(cfn) = func {
+                        match interp.call_crust_fn(&cfn, vec![], None) {
+                            Ok(v) => Some(Ok(v)),
+                            Err(e) => Some(Err(e)),
+                        }
+                    } else { Some(Ok(Value::Option_(None))) }
+                }
+                other => Some(Ok(other)),
+            }
+        }
+        (Value::Option_(_), "take") => {
+            Some(Ok(recv)) // at Level 0, take() just returns the value
+        }
+        (Value::Option_(_), "as_ref" | "as_deref") => {
+            Some(Ok(recv)) // at Level 0, ref = value
+        }
+        (Value::Option_(_), "copied" | "cloned") => {
+            Some(Ok(recv)) // at Level 0, everything is cloned
+        }
+        (Value::Option_(_), "zip") => {
+            match recv {
+                Value::Option_(None) => Some(Ok(Value::Option_(None))),
+                Value::Option_(Some(a)) => {
+                    let other = args.into_iter().next().unwrap_or(Value::Option_(None));
+                    match other {
+                        Value::Option_(None) => Some(Ok(Value::Option_(None))),
+                        Value::Option_(Some(b)) => Some(Ok(Value::Option_(Some(Box::new(Value::Tuple(vec![*a, *b])))))),
+                        b => Some(Ok(Value::Option_(Some(Box::new(Value::Tuple(vec![*a, b])))))),
+                    }
+                }
+                _ => None,
+            }
+        }
 
         // ── Result methods ────────────────────────────────────────────────────
         (Value::Result_(_), "unwrap") => {
@@ -1277,6 +1376,62 @@ pub fn call_method(
                 Value::Result_(Err(_)) => Some(Ok(Value::Option_(None))),
                 _ => None,
             }
+        }
+        (Value::Result_(_), "err") => {
+            match recv {
+                Value::Result_(Err(e)) => Some(Ok(Value::Option_(Some(e)))),
+                Value::Result_(Ok(_)) => Some(Ok(Value::Option_(None))),
+                _ => None,
+            }
+        }
+        (Value::Result_(_), "map_err") => {
+            match recv {
+                Value::Result_(Ok(v)) => Some(Ok(Value::Result_(Ok(v)))),
+                Value::Result_(Err(e)) => {
+                    let func = args.into_iter().next().unwrap_or(Value::Unit);
+                    let new_err = match &func {
+                        Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![*e], None) {
+                            Ok(v) => v,
+                            Err(e) => return Some(Err(e)),
+                        },
+                        _ => *e,
+                    };
+                    Some(Ok(Value::Result_(Err(Box::new(new_err)))))
+                }
+                _ => None,
+            }
+        }
+        (Value::Result_(_), "unwrap_or_default") => {
+            match recv {
+                Value::Result_(Ok(v)) => Some(Ok(*v)),
+                Value::Result_(Err(_)) => Some(Ok(Value::Int(0))),
+                _ => None,
+            }
+        }
+        (Value::Result_(_), "or") => {
+            match recv {
+                Value::Result_(Ok(_)) => Some(Ok(recv)),
+                Value::Result_(Err(_)) => Some(Ok(args.into_iter().next().unwrap_or(recv))),
+                other => Some(Ok(other)),
+            }
+        }
+        (Value::Result_(_), "or_else") => {
+            match recv {
+                Value::Result_(Ok(_)) => Some(Ok(recv)),
+                Value::Result_(Err(e)) => {
+                    let func = args.into_iter().next().unwrap_or(Value::Unit);
+                    if let Value::Fn(cfn) = func {
+                        match interp.call_crust_fn(&cfn, vec![*e], None) {
+                            Ok(v) => Some(Ok(v)),
+                            Err(e) => Some(Err(e)),
+                        }
+                    } else { Some(Ok(Value::Result_(Err(e)))) }
+                }
+                other => Some(Ok(other)),
+            }
+        }
+        (Value::Result_(_), "as_ref" | "as_deref" | "as_mut") => {
+            Some(Ok(recv)) // at Level 0, ref = value
         }
 
         // ── HashMap methods ───────────────────────────────────────────────────
@@ -1392,6 +1547,92 @@ pub fn call_method(
                     _ => true,
                 };
                 if keep { result.push(Value::Int(i)); }
+            }
+            Some(Ok(Value::Vec(result)))
+        }
+        (Value::Range(start, end, inclusive), "filter_map") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end_val = if inc { e + 1 } else { e };
+            let func = args.into_iter().next().unwrap_or(Value::Unit);
+            let mut result = Vec::new();
+            for i in s..end_val {
+                let mapped = match &func {
+                    Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![Value::Int(i)], None) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    },
+                    _ => Value::Int(i),
+                };
+                match mapped {
+                    Value::Option_(Some(inner)) => result.push(*inner),
+                    Value::Option_(None) => {}
+                    other if !matches!(other, Value::Unit) => result.push(other),
+                    _ => {}
+                }
+            }
+            Some(Ok(Value::Vec(result)))
+        }
+        (Value::Range(start, end, inclusive), "product") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end = if inc { e + 1 } else { e };
+            let product: i64 = (s..end).product();
+            Some(Ok(Value::Int(product)))
+        }
+        (Value::Range(start, end, inclusive), "find") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end_val = if inc { e + 1 } else { e };
+            let func = args.into_iter().next().unwrap_or(Value::Unit);
+            for i in s..end_val {
+                let found = match &func {
+                    Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![Value::Int(i)], None) {
+                        Ok(v) => v.is_truthy(),
+                        Err(e) => return Some(Err(e)),
+                    },
+                    _ => false,
+                };
+                if found { return Some(Ok(Value::Option_(Some(Box::new(Value::Int(i)))))); }
+            }
+            Some(Ok(Value::Option_(None)))
+        }
+        (Value::Range(start, end, inclusive), "position" | "find_map") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end_val = if inc { e + 1 } else { e };
+            let func = args.into_iter().next().unwrap_or(Value::Unit);
+            for (idx, i) in (s..end_val).enumerate() {
+                let v = match &func {
+                    Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![Value::Int(i)], None) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    },
+                    _ => Value::Bool(false),
+                };
+                if v.is_truthy() { return Some(Ok(Value::Option_(Some(Box::new(Value::Int(idx as i64)))))); }
+            }
+            Some(Ok(Value::Option_(None)))
+        }
+        (Value::Range(start, end, inclusive), "zip") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end_val = if inc { e + 1 } else { e };
+            let other = match args.into_iter().next() {
+                Some(Value::Vec(v)) => v,
+                _ => return Some(Ok(Value::Vec(vec![]))),
+            };
+            let pairs: Vec<Value> = (s..end_val).zip(other.into_iter())
+                .map(|(i, v)| Value::Tuple(vec![Value::Int(i), v]))
+                .collect();
+            Some(Ok(Value::Vec(pairs)))
+        }
+        (Value::Range(start, end, inclusive), "chain") => {
+            let (s, e, inc) = (*start, *end, *inclusive);
+            let end_val = if inc { e + 1 } else { e };
+            let mut result: Vec<Value> = (s..end_val).map(Value::Int).collect();
+            match args.into_iter().next() {
+                Some(Value::Vec(v)) => result.extend(v),
+                Some(Value::Range(s2, e2, inc2)) => {
+                    let end2 = if inc2 { e2 + 1 } else { e2 };
+                    result.extend((s2..end2).map(Value::Int));
+                }
+                _ => {}
             }
             Some(Ok(Value::Vec(result)))
         }
