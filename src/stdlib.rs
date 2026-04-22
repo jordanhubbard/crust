@@ -1888,6 +1888,58 @@ pub fn call_method(
         (Value::Option_(_), "is_none") => {
             Some(Ok(Value::Bool(matches!(recv, Value::Option_(None)))))
         }
+        (Value::Option_(_), "map_or") => {
+            let mut it = args.into_iter();
+            let default = it.next().unwrap_or(Value::Unit);
+            let func = it.next().unwrap_or(Value::Unit);
+            match recv {
+                Value::Option_(None) => Some(Ok(default)),
+                Value::Option_(Some(v)) => match &func {
+                    Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![*v], None) {
+                        Ok(r) => Some(Ok(r)),
+                        Err(e) => Some(Err(e)),
+                    },
+                    _ => Some(Ok(*v)),
+                },
+                _ => None,
+            }
+        }
+        (Value::Option_(_), "map_or_else") => {
+            let mut it = args.into_iter();
+            let default_fn = it.next().unwrap_or(Value::Unit);
+            let func = it.next().unwrap_or(Value::Unit);
+            match recv {
+                Value::Option_(None) => match &default_fn {
+                    Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![], None) {
+                        Ok(r) => Some(Ok(r)),
+                        Err(e) => Some(Err(e)),
+                    },
+                    _ => Some(Ok(Value::Unit)),
+                },
+                Value::Option_(Some(v)) => match &func {
+                    Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![*v], None) {
+                        Ok(r) => Some(Ok(r)),
+                        Err(e) => Some(Err(e)),
+                    },
+                    _ => Some(Ok(*v)),
+                },
+                _ => None,
+            }
+        }
+        (Value::Option_(_), "unwrap_or_else") => {
+            let func = args.into_iter().next().unwrap_or(Value::Unit);
+            match recv {
+                Value::Option_(Some(v)) => Some(Ok(*v)),
+                Value::Option_(None) => match &func {
+                    Value::Fn(cfn) => match interp.call_crust_fn(cfn, vec![], None) {
+                        Ok(r) => Some(Ok(r)),
+                        Err(e) => Some(Err(e)),
+                    },
+                    _ => Some(Ok(Value::Unit)),
+                },
+                _ => None,
+            }
+        }
         (Value::Option_(_), "expect") => {
             let msg = args.into_iter().next().map(|v| v.to_string()).unwrap_or_else(|| "expect failed".into());
             match recv {
