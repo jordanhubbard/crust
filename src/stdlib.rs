@@ -319,8 +319,8 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
         "Vec::new" | "VecDeque::new" | "HashSet::new" | "BTreeSet::new" => Some(Ok(Value::Vec(Vec::new()))),
         "Vec::with_capacity" | "VecDeque::with_capacity" | "HashSet::with_capacity" => Some(Ok(Value::Vec(Vec::new()))),
 
-        // HashMap constructors
-        "HashMap::new" => Some(Ok(Value::HashMap(HashMap::new()))),
+        // HashMap / BTreeMap constructors (BTreeMap backed by same HashMap, sorted on iteration)
+        "HashMap::new" | "BTreeMap::new" => Some(Ok(Value::HashMap(HashMap::new()))),
 
         // char constructors
         "char::from" | "char::from_u32_unchecked" => {

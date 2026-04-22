@@ -1220,7 +1220,9 @@ impl Parser {
                 }
 
                 // single ident: check for struct literal
-                if self.check(&TokenKind::LBrace) && self.looks_like_struct_lit() {
+                // Only consider it a struct literal if name starts with uppercase (Rust convention for types)
+                let ident_is_type = name.chars().next().map_or(false, |c| c.is_uppercase());
+                if self.check(&TokenKind::LBrace) && ident_is_type && self.looks_like_struct_lit() {
                     return self.parse_struct_lit(name);
                 }
 
