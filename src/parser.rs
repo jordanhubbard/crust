@@ -77,17 +77,6 @@ impl Parser {
         Ok(name)
     }
 
-    fn eat_ident(&mut self) -> Option<String> {
-        match self.peek().clone() {
-            TokenKind::Ident(s) => { self.advance(); Some(s) }
-            _ => None,
-        }
-    }
-
-    fn eat_keyword(&mut self, kw: &TokenKind) -> bool {
-        self.eat(kw)
-    }
-
     // Skip generic parameters <T, U, ...> including lifetime params
     fn skip_generics(&mut self) {
         if !self.check(&TokenKind::Lt) { return; }
@@ -1224,7 +1213,7 @@ impl Parser {
             // closure: |args| expr  or  |args| { block }  or  move |args| expr
             TokenKind::Or | TokenKind::OrOr | TokenKind::Move => {
                 if self.check(&TokenKind::Move) { self.advance(); }
-                let (params, had_pipe) = if self.check(&TokenKind::OrOr) {
+                let (params, _had_pipe) = if self.check(&TokenKind::OrOr) {
                     self.advance();
                     (vec![], true)
                 } else {

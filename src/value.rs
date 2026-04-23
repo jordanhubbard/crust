@@ -67,7 +67,7 @@ impl fmt::Display for Value {
             Value::Struct { type_name, fields } => {
                 write!(f, "{} {{", type_name)?;
                 let mut pairs: Vec<_> = fields.iter().collect();
-                pairs.sort_by_key(|(k, _)| k.clone());
+                pairs.sort_by_key(|(k, _)| (*k).clone());
                 for (i, (k, v)) in pairs.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
                     write!(f, " {}: {}", k, v)?;
