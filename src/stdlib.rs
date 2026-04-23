@@ -156,6 +156,13 @@ pub fn call_method_mut(
             }
             Some((Ok(Value::Unit), Value::Vec(v)))
         }
+        (Value::Vec(mut v), "resize") => {
+            let mut it = args.into_iter();
+            let new_len = match it.next() { Some(Value::Int(n)) => n as usize, _ => v.len() };
+            let fill = it.next().unwrap_or(Value::Int(0));
+            v.resize(new_len, fill);
+            Some((Ok(Value::Unit), Value::Vec(v)))
+        }
         (Value::Vec(mut v), "split_off") => {
             let at = match args.into_iter().next() {
                 Some(Value::Int(n)) => n as usize,
@@ -336,6 +343,23 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
 
         // HashMap / BTreeMap constructors (BTreeMap backed by same HashMap, sorted on iteration)
         "HashMap::new" | "BTreeMap::new" => Some(Ok(Value::HashMap(HashMap::new()))),
+        "HashMap::from" | "BTreeMap::from" => {
+            // HashMap::from([(k,v), ...]) or HashMap::from([...])
+            let mut map = HashMap::new();
+            if let Some(Value::Vec(pairs)) = args.into_iter().next() {
+                for pair in pairs {
+                    match pair {
+                        Value::Tuple(mut kv) if kv.len() == 2 => {
+                            let v = kv.remove(1);
+                            let k = kv.remove(0).to_string();
+                            map.insert(k, v);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Some(Ok(Value::HashMap(map)))
+        }
 
         // char constructors
         "char::from" | "char::from_u32_unchecked" => {
@@ -449,8 +473,19 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
         "f64::MIN" | "std::f64::MIN" => Some(Ok(Value::Float(f64::MIN))),
         "f64::MIN_POSITIVE" => Some(Ok(Value::Float(f64::MIN_POSITIVE))),
         "f64::EPSILON" => Some(Ok(Value::Float(f64::EPSILON))),
-        "f64::PI" | "std::f64::consts::PI" => Some(Ok(Value::Float(std::f64::consts::PI))),
-        "f64::E" | "std::f64::consts::E" => Some(Ok(Value::Float(std::f64::consts::E))),
+        "f64::PI" | "std::f64::consts::PI" | "f64::consts::PI" => Some(Ok(Value::Float(std::f64::consts::PI))),
+        "f64::E" | "std::f64::consts::E" | "f64::consts::E" => Some(Ok(Value::Float(std::f64::consts::E))),
+        "std::f64::consts::SQRT_2" | "f64::consts::SQRT_2" | "f64::SQRT_2" => Some(Ok(Value::Float(std::f64::consts::SQRT_2))),
+        "std::f64::consts::LN_2" | "f64::consts::LN_2" | "f64::LN_2" => Some(Ok(Value::Float(std::f64::consts::LN_2))),
+        "std::f64::consts::LN_10" | "f64::consts::LN_10" | "f64::LN_10" => Some(Ok(Value::Float(std::f64::consts::LN_10))),
+        "std::f64::consts::LOG2_E" | "f64::consts::LOG2_E" | "f64::LOG2_E" => Some(Ok(Value::Float(std::f64::consts::LOG2_E))),
+        "std::f64::consts::LOG10_E" | "f64::consts::LOG10_E" | "f64::LOG10_E" => Some(Ok(Value::Float(std::f64::consts::LOG10_E))),
+        "std::f64::consts::FRAC_1_PI" | "f64::consts::FRAC_1_PI" => Some(Ok(Value::Float(std::f64::consts::FRAC_1_PI))),
+        "std::f64::consts::FRAC_2_PI" | "f64::consts::FRAC_2_PI" => Some(Ok(Value::Float(std::f64::consts::FRAC_2_PI))),
+        "std::f64::consts::FRAC_PI_2" | "f64::consts::FRAC_PI_2" => Some(Ok(Value::Float(std::f64::consts::FRAC_PI_2))),
+        "std::f64::consts::FRAC_PI_3" | "f64::consts::FRAC_PI_3" => Some(Ok(Value::Float(std::f64::consts::FRAC_PI_3))),
+        "std::f64::consts::FRAC_PI_4" | "f64::consts::FRAC_PI_4" => Some(Ok(Value::Float(std::f64::consts::FRAC_PI_4))),
+        "std::f64::consts::TAU" | "f64::consts::TAU" | "f64::TAU" => Some(Ok(Value::Float(std::f64::consts::TAU))),
 
         // Generic T::default() — return zero-like value for any unresolved generic type
         s if s.ends_with("::default") => Some(Ok(Value::Int(0))),
@@ -559,7 +594,7 @@ pub fn call_method(
                 } else { Some(Ok(Value::Bool(true))) }
             } else { None }
         }
-        (Value::Vec(_), "first" | "next") => {
+        (Value::Vec(_), "first" | "next" | "front") => {
             if let Value::Vec(v) = recv {
                 Some(Ok(Value::Option_(v.into_iter().next().map(Box::new))))
             } else { None }
@@ -570,7 +605,7 @@ pub fn call_method(
                 Some(Ok(Value::Option_(v.first().cloned().map(Box::new))))
             } else { None }
         }
-        (Value::Vec(_), "last") => {
+        (Value::Vec(_), "last" | "back") => {
             if let Value::Vec(v) = recv {
                 Some(Ok(Value::Option_(v.into_iter().last().map(Box::new))))
             } else { None }
@@ -748,23 +783,21 @@ pub fn call_method(
             } else { None }
         }
         (Value::Vec(_), "collect") => {
-            // collect::<Result<Vec<T>, E>>() — first Err short-circuits
-            if let Value::Vec(ref v) = recv {
-                if !v.is_empty() && v.iter().all(|x| matches!(x, Value::Result_(_))) {
-                    if let Value::Vec(v) = recv {
-                        let mut items = Vec::new();
-                        for item in v {
-                            match item {
-                                Value::Result_(Err(e)) => return Some(Ok(Value::Result_(Err(e)))),
-                                Value::Result_(Ok(inner)) => items.push(*inner),
-                                other => items.push(other),
-                            }
-                        }
-                        return Some(Ok(Value::Result_(Ok(Box::new(Value::Vec(items))))));
+            Some(Ok(recv))
+        }
+        // collect::<Result<Vec<T>, E>>() — explicit short-circuit collect
+        (Value::Vec(_), "collect_result") => {
+            if let Value::Vec(v) = recv {
+                let mut items = Vec::new();
+                for item in v {
+                    match item {
+                        Value::Result_(Err(e)) => return Some(Ok(Value::Result_(Err(e)))),
+                        Value::Result_(Ok(inner)) => items.push(*inner),
+                        other => items.push(other),
                     }
                 }
-            }
-            Some(Ok(recv))
+                Some(Ok(Value::Result_(Ok(Box::new(Value::Vec(items))))))
+            } else { None }
         }
         // collect::<HashSet<_>>() — deduplicate Vec
         (Value::Vec(_), "collect_hashset") => {
@@ -1051,20 +1084,19 @@ pub fn call_method(
             if let Value::Vec(v) = recv {
                 let func = args.into_iter().next().unwrap_or(Value::Unit);
                 let mut best: Option<Value> = None;
-                if let Value::Fn(cfn) = &func {
-                    for item in v {
-                        let replace = match &best {
-                            None => true,
-                            Some(b) => {
-                                match interp.call_crust_fn(cfn, vec![item.clone(), b.clone()], None) {
-                                    Ok(Value::Int(n)) if n > 0 => true,
-                                    Ok(_) => false,
-                                    Err(e) => return Some(Err(e)),
-                                }
+                for item in v {
+                    let replace = match &best {
+                        None => true,
+                        Some(b) => {
+                            match call_value_as_fn(&func, vec![item.clone(), b.clone()], interp) {
+                                Ok(Value::Int(n)) if n > 0 => true,
+                                Ok(Value::Enum { variant, .. }) if variant == "Greater" => true,
+                                Ok(_) => false,
+                                Err(e) => return Some(Err(e)),
                             }
-                        };
-                        if replace { best = Some(item); }
-                    }
+                        }
+                    };
+                    if replace { best = Some(item); }
                 }
                 Some(Ok(Value::Option_(best.map(Box::new))))
             } else { None }
@@ -1073,20 +1105,19 @@ pub fn call_method(
             if let Value::Vec(v) = recv {
                 let func = args.into_iter().next().unwrap_or(Value::Unit);
                 let mut best: Option<Value> = None;
-                if let Value::Fn(cfn) = &func {
-                    for item in v {
-                        let replace = match &best {
-                            None => true,
-                            Some(b) => {
-                                match interp.call_crust_fn(cfn, vec![item.clone(), b.clone()], None) {
-                                    Ok(Value::Int(n)) if n < 0 => true,
-                                    Ok(_) => false,
-                                    Err(e) => return Some(Err(e)),
-                                }
+                for item in v {
+                    let replace = match &best {
+                        None => true,
+                        Some(b) => {
+                            match call_value_as_fn(&func, vec![item.clone(), b.clone()], interp) {
+                                Ok(Value::Int(n)) if n < 0 => true,
+                                Ok(Value::Enum { variant, .. }) if variant == "Less" => true,
+                                Ok(_) => false,
+                                Err(e) => return Some(Err(e)),
                             }
-                        };
-                        if replace { best = Some(item); }
-                    }
+                        }
+                    };
+                    if replace { best = Some(item); }
                 }
                 Some(Ok(Value::Option_(best.map(Box::new))))
             } else { None }
@@ -1250,10 +1281,10 @@ pub fn call_method(
                 Some(Ok(Value::Bool(s.ends_with(&suffix[..]))))
             } else { None }
         }
-        (Value::Str(_), "to_uppercase") => {
+        (Value::Str(_), "to_uppercase" | "to_ascii_uppercase") => {
             if let Value::Str(s) = recv { Some(Ok(Value::Str(s.to_uppercase()))) } else { None }
         }
-        (Value::Str(_), "to_lowercase") => {
+        (Value::Str(_), "to_lowercase" | "to_ascii_lowercase") => {
             if let Value::Str(s) = recv { Some(Ok(Value::Str(s.to_lowercase()))) } else { None }
         }
         // String::collect() is identity (e.g. from to_uppercase().collect())
@@ -1278,6 +1309,24 @@ pub fn call_method(
                     Value::Str(s[..mid].to_string()),
                     Value::Str(s[mid..].to_string()),
                 ])))
+            } else { None }
+        }
+        (Value::Str(_), "strip_prefix") => {
+            if let Value::Str(s) = recv {
+                let pat = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                Some(Ok(match s.strip_prefix(pat.as_str()) {
+                    Some(rest) => Value::Option_(Some(Box::new(Value::Str(rest.to_string())))),
+                    None => Value::Option_(None),
+                }))
+            } else { None }
+        }
+        (Value::Str(_), "strip_suffix") => {
+            if let Value::Str(s) = recv {
+                let pat = args.into_iter().next().map(|v| v.to_string()).unwrap_or_default();
+                Some(Ok(match s.strip_suffix(pat.as_str()) {
+                    Some(rest) => Value::Option_(Some(Box::new(Value::Str(rest.to_string())))),
+                    None => Value::Option_(None),
+                }))
             } else { None }
         }
         (Value::Str(_), "split_once") => {
@@ -1734,6 +1783,12 @@ pub fn call_method(
             if let Value::Int(n) = recv {
                 let rhs = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
                 Some(Ok(Value::Int(n.rem_euclid(rhs))))
+            } else { None }
+        }
+        (Value::Int(_), "div_euclid") => {
+            if let Value::Int(n) = recv {
+                let rhs = match args.into_iter().next() { Some(Value::Int(x)) => x, _ => return None };
+                Some(Ok(Value::Int(n.div_euclid(rhs))))
             } else { None }
         }
         (Value::Int(_), "checked_add") => {

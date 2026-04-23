@@ -168,6 +168,7 @@ pub struct ImplDef {
     pub type_name: String,
     pub trait_name: Option<String>,
     pub methods: Vec<FnDef>,
+    pub consts: Vec<(String, Expr)>,
 }
 
 pub type Program = Vec<Item>;

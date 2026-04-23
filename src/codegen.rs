@@ -93,6 +93,9 @@ impl Codegen {
             out.push_str(&format!("impl {} {{\n", i.type_name));
         }
         self.indent += 1;
+        for (name, expr) in &i.consts {
+            out.push_str(&format!("{}const {}: _ = {};\n", "    ".repeat(self.indent), name, self.emit_expr(expr)));
+        }
         for m in &i.methods {
             out.push_str(&self.emit_fn(m));
         }

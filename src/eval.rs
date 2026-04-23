@@ -347,6 +347,14 @@ impl Interpreter {
                     self.impls.entry(def.type_name.clone()).or_default().extend(to_add);
                 }
                 self.impls.entry(def.type_name.clone()).or_default().extend(def.methods);
+                // Register associated constants as TypeName::CONST_NAME
+                for (const_name, const_expr) in &def.consts {
+                    let env = Rc::new(RefCell::new(Env::new()));
+                    if let Ok(v) = self.eval_expr(const_expr, env) {
+                        let key = format!("{}::{}", def.type_name, const_name);
+                        self.consts.insert(key, v);
+                    }
+                }
             }
             Item::Const { name, value, .. } => {
                 let env = Rc::new(RefCell::new(Env::new()));
@@ -621,10 +629,17 @@ impl Interpreter {
                         // Try full path and progressively shorter paths as qualified lookups
                         // std::f64::consts::PI → try "std::f64::consts::PI", "f64::consts::PI", "consts::PI"
                         let full = parts.join("::");
+                        // Check user-defined consts (impl consts, top-level consts)
+                        if let Some(v) = self.consts.get(&full).cloned() {
+                            return Ok(v);
+                        }
                         if let Some(r) = crate::stdlib::call_builtin(&full, vec![], self) {
                             return r;
                         }
                         let qualified = format!("{}::{}", type_name, name);
+                        if let Some(v) = self.consts.get(&qualified).cloned() {
+                            return Ok(v);
+                        }
                         if let Some(r) = crate::stdlib::call_builtin(&qualified, vec![], self) {
                             return r;
                         }
@@ -1222,6 +1237,18 @@ impl Interpreter {
 
             s if s.starts_with("__vec_repeat__") => {
                 // vec![val; N] repeat: args[0] = value, args[1] = count
+                if args.len() == 2 {
+                    let val = self.eval_expr(&args[0], Rc::clone(&env))?;
+                    let n = match self.eval_expr(&args[1], Rc::clone(&env))? {
+                        Value::Int(n) => n as usize,
+                        _ => 0,
+                    };
+                    Ok(Value::Vec(vec![val; n]))
+                } else { Ok(Value::Vec(vec![])) }
+            }
+
+            "__array_repeat__" => {
+                // [val; N] array repeat: args[0] = value, args[1] = count
                 if args.len() == 2 {
                     let val = self.eval_expr(&args[0], Rc::clone(&env))?;
                     let n = match self.eval_expr(&args[1], Rc::clone(&env))? {

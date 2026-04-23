@@ -315,13 +315,23 @@ impl Parser {
         self.skip_where();
         self.expect(&TokenKind::LBrace)?;
         let mut methods = Vec::new();
+        let mut consts = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
             self.eat(&TokenKind::Pub);
             if self.check(&TokenKind::Fn) {
                 self.advance();
                 methods.push(self.parse_fn_def()?);
-            } else if matches!(self.peek(), TokenKind::Const | TokenKind::Type) {
-                // skip associated consts/types
+            } else if self.check(&TokenKind::Const) {
+                self.advance(); // consume `const`
+                let const_name = self.expect_ident()?;
+                // skip type annotation
+                if self.eat(&TokenKind::Colon) { let _ = self.parse_ty()?; }
+                self.expect(&TokenKind::Eq)?;
+                let val = self.parse_expr(0)?;
+                self.eat(&TokenKind::Semi);
+                consts.push((const_name, val));
+            } else if self.check(&TokenKind::Type) {
+                // skip type aliases
                 while !matches!(self.peek(), TokenKind::Semi | TokenKind::RBrace | TokenKind::Eof) {
                     self.advance();
                 }
@@ -331,7 +341,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace)?;
-        Ok(ImplDef { type_name, trait_name, methods })
+        Ok(ImplDef { type_name, trait_name, methods, consts })
     }
 
     fn parse_trait(&mut self) -> Result<Item> {
@@ -611,6 +621,15 @@ impl Parser {
             self.eat(&TokenKind::Semi);
             return Ok(Stmt::LetPat { pat, ty, init, else_block });
         }
+        // Slice pattern: let [a, b, ..] = ...
+        if self.check(&TokenKind::LBracket) {
+            let pat = self.parse_pat_single()?;
+            let ty = if self.eat(&TokenKind::Colon) { Some(self.parse_ty()?) } else { None };
+            let init = if self.eat(&TokenKind::Eq) { Some(self.parse_expr(0)?) } else { None };
+            let else_block = if self.eat(&TokenKind::Else) { Some(self.parse_block()?) } else { None };
+            self.eat(&TokenKind::Semi);
+            return Ok(Stmt::LetPat { pat, ty, init, else_block });
+        }
         let name = match self.peek().clone() {
             TokenKind::Ident(s) => { self.advance(); s }
             TokenKind::Underscore => { self.advance(); "_".to_string() }
@@ -705,6 +724,9 @@ impl Parser {
         let mut lhs = self.parse_unary()?;
 
         loop {
+            // for/while/loop always return () — don't let them grab trailing operators
+            if is_block_stmt_expr(&lhs) { break; }
+
             let (op, prec, right_assoc) = match self.peek() {
                 // assignment (right-assoc, lowest)
                 TokenKind::Eq       => (None::<BinOp>,                    1, true),
@@ -1003,10 +1025,26 @@ impl Parser {
             // Array literal
             TokenKind::LBracket => {
                 self.advance();
-                let mut elems = Vec::new();
-                while !self.check(&TokenKind::RBracket) && !self.check(&TokenKind::Eof) {
-                    elems.push(self.parse_expr(0)?);
-                    if !self.eat(&TokenKind::Comma) { break; }
+                if self.check(&TokenKind::RBracket) {
+                    self.advance();
+                    return Ok(Expr::Array(vec![]));
+                }
+                let first = self.parse_expr(0)?;
+                // [expr; N] — array repeat syntax
+                if self.eat(&TokenKind::Semi) {
+                    let count_expr = self.parse_expr(0)?;
+                    self.expect(&TokenKind::RBracket)?;
+                    return Ok(Expr::Macro {
+                        name: "__array_repeat__".into(),
+                        args: vec![first, count_expr],
+                    });
+                }
+                let mut elems = vec![first];
+                if self.eat(&TokenKind::Comma) {
+                    while !self.check(&TokenKind::RBracket) && !self.check(&TokenKind::Eof) {
+                        elems.push(self.parse_expr(0)?);
+                        if !self.eat(&TokenKind::Comma) { break; }
+                    }
                 }
                 self.expect(&TokenKind::RBracket)?;
                 Ok(Expr::Array(elems))
@@ -1590,6 +1628,17 @@ fn path_to_lit(path: &str) -> Option<Lit> {
         "u32::MAX" => Some(Lit::Int(u32::MAX as i64)),
         "usize::MAX" | "u64::MAX" => Some(Lit::Int(i64::MAX)),
         _ => None,
+    }
+}
+
+/// Returns true for block-statement expressions (for/while/loop) that always produce ()
+/// and should never be followed by a binary operator in statement position.
+fn is_block_stmt_expr(e: &crate::ast::Expr) -> bool {
+    match e {
+        crate::ast::Expr::Macro { name, .. } => {
+            matches!(name.as_str(), "__for__" | "__while__")
+        }
+        _ => false,
     }
 }
 

@@ -23,7 +23,7 @@ $ crust run main.crust
 Sum of [1, 2, 3, 4, 5] is 15
 
 $ crust build main.crust -o main
-   Compiled crust v0.1.0
+   Compiled crust v0.2.0
     Finished `release` profile [optimized]
       Binary: main
 
@@ -163,7 +163,22 @@ crust build --emit-rs lib.crust # see the Rust that Crust generates
 
 ## Current Status
 
-**v0.1.0** — Foundation. Lexer, parser, interpreter core, build pipeline.
+**v0.2.0** — Level 0 complete.
+
+The Level 0 interpreter now covers essentially all of Rust's expression language:
+
+- **All primitive types**: `i8`–`i64`, `u8`–`u64`, `f32`/`f64`, `bool`, `char`, `str`/`String`
+- **Collections**: `Vec`, `HashMap`, `HashSet`, `BTreeMap`, `VecDeque` (all backed by Vec/HashMap at Level 0)
+- **Traits**: definition, implementation, default methods, `dyn Trait`, `impl Trait`, operator overloading (`Add`, `Mul`, `Neg`, etc.)
+- **Closures**: capturing, `move`, `FnMut`, returning closures, higher-order functions
+- **Pattern matching**: destructuring, guards, or-patterns, slice patterns `[a, b, ..]`, range patterns, `@` bindings
+- **Error handling**: `Result`/`Option` with `?` operator, combinators (`map`, `and_then`, `unwrap_or`, etc.)
+- **Iterators**: `map`, `filter`, `fold`, `flat_map`, `zip`, `enumerate`, `chain`, `scan`, `partition`, `unzip`, custom `Iterator` impls
+- **Control flow**: `for`, `while`, `loop`, labeled breaks, `while let`, `if let`, `let-else`
+- **Generics**: generic functions and structs (type-erased at Level 0)
+- **String formatting**: width, alignment, fill, precision, hex/bin/oct, named args
+- **Associated constants** (`impl Type { const FOO: T = v; }`)
+- **Array repeat syntax** (`[val; N]`)
 
 See [DESIGN.md](DESIGN.md) for the full technical architecture and roadmap.
 
