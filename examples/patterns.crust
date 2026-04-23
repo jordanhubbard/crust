@@ -1,0 +1,92 @@
+// Patterns — destructuring, guards, let-else, slice patterns.
+// Pattern matching is pervasive in Rust; crust supports all the common forms.
+
+fn classify(n: i64) -> &str {
+    match n {
+        0          => "zero",
+        1 | 2 | 3 => "tiny",
+        4..=9      => "small",
+        10..=99    => "medium",
+        _          => "large",
+    }
+}
+
+fn first_and_last(items: Vec<i64>) -> Option<(i64, i64)> {
+    // let-else: bail early if the pattern doesn't match
+    let [first, .., last] = items.as_slice() else {
+        return None;
+    };
+    Some((*first, *last))
+}
+
+fn describe_slice(nums: Vec<i64>) -> String {
+    match nums.as_slice() {
+        []           => "empty".to_string(),
+        [x]          => format!("single: {}", x),
+        [x, y]       => format!("pair: {} and {}", x, y),
+        [head, .., tail] => format!("starts with {}, ends with {}", head, tail),
+    }
+}
+
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+fn quadrant(p: Point) -> &str {
+    match p {
+        Point { x, y } if x > 0.0 && y > 0.0 => "Q1",
+        Point { x, y } if x < 0.0 && y > 0.0 => "Q2",
+        Point { x, y } if x < 0.0 && y < 0.0 => "Q3",
+        Point { x, y } if x > 0.0 && y < 0.0 => "Q4",
+        _                                       => "on axis",
+    }
+}
+
+fn main() {
+    // Range and or-patterns
+    for n in [-5, 0, 2, 7, 42] {
+        println!("{:>4} => {}", n, classify(n));
+    }
+
+    println!();
+
+    // Slice patterns
+    let lists = vec![
+        vec![],
+        vec![42],
+        vec![1, 2],
+        vec![10, 20, 30, 40, 50],
+    ];
+    for list in lists {
+        println!("{:?} => {}", list, describe_slice(list));
+    }
+
+    println!();
+
+    // let-else for early returns
+    let full  = vec![1, 2, 3, 4, 5];
+    let empty: Vec<i64> = vec![];
+    println!("first_and_last({:?}) = {:?}", full,  first_and_last(full));
+    println!("first_and_last({:?}) = {:?}", empty, first_and_last(empty));
+
+    println!();
+
+    // Struct destructuring with guards
+    let points = vec![
+        Point { x:  1.0, y:  2.0 },
+        Point { x: -3.0, y:  1.0 },
+        Point { x: -1.0, y: -4.0 },
+        Point { x:  2.0, y: -1.0 },
+        Point { x:  0.0, y:  3.0 },
+    ];
+    for p in points {
+        println!("({}, {}) => {}", p.x, p.y, quadrant(p));
+    }
+
+    // Tuple destructuring in for loop
+    let pairs = vec![(1, "one"), (2, "two"), (3, "three")];
+    for (n, name) in pairs {
+        println!("{} = {}", n, name);
+    }
+}

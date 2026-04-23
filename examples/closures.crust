@@ -1,0 +1,39 @@
+// Closures — anonymous functions that capture their environment.
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
+    f(x)
+}
+
+fn apply_twice(f: fn(i64) -> i64, x: i64) -> i64 {
+    f(f(x))
+}
+
+fn main() {
+    // Basic closure syntax: |params| expression
+    let double = |x| x * 2;
+    let square = |x| x * x;
+
+    println!("double(5)       = {}", double(5));
+    println!("square(5)       = {}", square(5));
+    println!("apply_twice(double, 3) = {}", apply_twice(double, 3));
+
+    // Closures capture surrounding variables
+    let threshold = 10;
+    let above_threshold = |x| x > threshold;
+
+    let numbers = vec![3, 14, 1, 5, 9, 26, 7];
+    let big: Vec<i64> = numbers.iter().filter(|x| above_threshold(*x)).collect();
+    println!("Above {}: {:?}", threshold, big);
+
+    // Inline closures in iterator chains
+    let words = vec!["hello", "world", "crust", "rocks"];
+    let lengths: Vec<usize> = words.iter().map(|w| w.len()).collect();
+    println!("Lengths: {:?}", lengths);
+
+    // Multi-statement closure body uses a block
+    let verbose_double = |x| {
+        let result = x * 2;
+        result
+    };
+    println!("verbose_double(21) = {}", verbose_double(21));
+}

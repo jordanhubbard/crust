@@ -1,0 +1,69 @@
+// Option<T> and Result<T, E> — Rust's way of handling absence and errors.
+// No null, no exceptions — just values you have to deal with.
+
+fn find_first_even(nums: Vec<i64>) -> Option<i64> {
+    nums.iter().find(|x| *x % 2 == 0)
+}
+
+fn divide(a: f64, b: f64) -> Result<f64, String> {
+    if b == 0.0 {
+        Err("division by zero".to_string())
+    } else {
+        Ok(a / b)
+    }
+}
+
+fn safe_sqrt(x: f64) -> Result<f64, String> {
+    if x < 0.0 {
+        Err(format!("cannot take sqrt of {}", x))
+    } else {
+        Ok(x.sqrt())
+    }
+}
+
+fn main() {
+    // --- Option<T> ---
+    let odds  = vec![1, 3, 5, 7, 9];
+    let mixed = vec![1, 3, 4, 7, 9];
+
+    // if let: only run code when Some
+    if let Some(n) = find_first_even(mixed) {
+        println!("First even: {}", n);
+    }
+
+    // unwrap_or: provide a default when None
+    let result = find_first_even(odds).unwrap_or(-1);
+    println!("First even in odds: {} (default -1)", result);
+
+    // Option methods
+    let maybe: Option<i64> = Some(21);
+    println!("Doubled: {:?}", maybe.map(|x| x * 2));
+    println!("Is some: {}", maybe.is_some());
+
+    let nothing: Option<i64> = None;
+    println!("Nothing or 99: {}", nothing.unwrap_or(99));
+
+    println!();
+
+    // --- Result<T, E> ---
+    let cases = vec![(10.0, 2.0), (7.0, 0.0), (-4.0, 1.0)];
+
+    for (a, b) in cases {
+        match divide(a, b) {
+            Ok(v)  => println!("{} / {} = {:.2}", a, b, v),
+            Err(e) => println!("{} / {} => error: {}", a, b, e),
+        }
+    }
+
+    println!();
+
+    // Chaining Results with map
+    let inputs = vec![9.0, -1.0, 16.0, 25.0];
+    for x in inputs {
+        let r = safe_sqrt(x).map(|s| s * 2.0);
+        match r {
+            Ok(v)  => println!("2 * sqrt({}) = {:.2}", x, v),
+            Err(e) => println!("sqrt({}) => {}", x, e),
+        }
+    }
+}

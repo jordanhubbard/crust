@@ -1,0 +1,72 @@
+// Enums and pattern matching — Rust's most powerful feature.
+
+enum Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+    Triangle(f64, f64, f64),
+}
+
+fn area(shape: Shape) -> f64 {
+    match shape {
+        Shape::Circle(r)          => 3.14159 * r * r,
+        Shape::Rectangle(w, h)   => w * h,
+        Shape::Triangle(a, b, c) => {
+            // Heron's formula
+            let s = (a + b + c) / 2.0;
+            (s * (s - a) * (s - b) * (s - c)).sqrt()
+        }
+    }
+}
+
+fn describe(shape: Shape) -> String {
+    match shape {
+        Shape::Circle(r) if r > 10.0 => format!("large circle (r={})", r),
+        Shape::Circle(r)             => format!("small circle (r={})", r),
+        Shape::Rectangle(w, h)      => format!("{}x{} rectangle", w, h),
+        Shape::Triangle(_, _, _)    => "triangle".to_string(),
+    }
+}
+
+// Enums can carry no data too (classic C-style)
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn opposite(d: Direction) -> Direction {
+    match d {
+        Direction::North => Direction::South,
+        Direction::South => Direction::North,
+        Direction::East  => Direction::West,
+        Direction::West  => Direction::East,
+    }
+}
+
+fn direction_name(d: Direction) -> &str {
+    match d {
+        Direction::North => "North",
+        Direction::South => "South",
+        Direction::East  => "East",
+        Direction::West  => "West",
+    }
+}
+
+fn main() {
+    let shapes = vec![
+        Shape::Circle(5.0),
+        Shape::Circle(15.0),
+        Shape::Rectangle(4.0, 6.0),
+        Shape::Triangle(3.0, 4.0, 5.0),
+    ];
+
+    for shape in shapes {
+        println!("{}: area = {:.2}", describe(shape), area(shape));
+    }
+
+    println!();
+
+    let dir = Direction::North;
+    println!("Opposite of {} is {}", direction_name(dir), direction_name(opposite(dir)));
+}
