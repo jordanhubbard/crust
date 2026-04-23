@@ -1471,6 +1471,62 @@ impl Parser {
                     Ok(Pat::Ident(full_name))
                 }
             }
+            TokenKind::LBracket => {
+                self.advance();
+                let mut before: Vec<Pat> = Vec::new();
+                let mut rest: Option<String> = None;
+                let mut has_rest = false;
+                let mut after: Vec<Pat> = Vec::new();
+                while !self.check(&TokenKind::RBracket) && !self.check(&TokenKind::Eof) {
+                    // Check for `name @ ..` or bare `..`
+                    let is_dotdot = self.check(&TokenKind::DotDot);
+                    // Check for `name @ ..`: peek ahead — but we can detect it by seeing
+                    // if the current token is an Ident followed by @ followed by ..
+                    // We'll handle bare `..` first, then `name @ ..` is caught by normal
+                    // ident parsing which sees `@` and tries parse_pat_single which gives Wild for `..`
+                    if is_dotdot {
+                        self.advance(); // consume ..
+                        has_rest = true;
+                        if self.eat(&TokenKind::Comma) { continue; }
+                        break;
+                    }
+                    // Parse a regular pattern; if it turns out to be `name @ ..` the
+                    // `@` branch will call parse_pat_single which returns Pat::Wild for `..`.
+                    // We intercept that here by checking before parsing.
+                    // Actually: check for ident @ .. specially
+                    if let TokenKind::Ident(ref name) = self.peek().clone() {
+                        // peek one further
+                        let name = name.clone();
+                        let pos = self.pos;
+                        self.advance(); // consume ident
+                        if self.eat(&TokenKind::At) {
+                            if self.check(&TokenKind::DotDot) {
+                                self.advance(); // consume ..
+                                has_rest = true;
+                                rest = Some(name);
+                                if self.eat(&TokenKind::Comma) { continue; }
+                                break;
+                            }
+                            // Not `..` after @, restore and re-parse normally
+                            // (We already consumed ident and @, so parse sub-pattern)
+                            let sub = self.parse_pat_single()?;
+                            let pat = Pat::Bind { name, pat: Box::new(sub) };
+                            if !has_rest { before.push(pat); } else { after.push(pat); }
+                        } else {
+                            // Not an @ binding — check path/struct/etc by rewinding
+                            self.pos = pos;
+                            let pat = self.parse_pat()?;
+                            if !has_rest { before.push(pat); } else { after.push(pat); }
+                        }
+                    } else {
+                        let pat = self.parse_pat()?;
+                        if !has_rest { before.push(pat); } else { after.push(pat); }
+                    }
+                    if !self.eat(&TokenKind::Comma) { break; }
+                }
+                self.expect(&TokenKind::RBracket)?;
+                Ok(Pat::Slice { before, rest, has_rest, after })
+            }
             other => Err(CrustError::parse(format!("expected pattern, got {:?}", other), self.line())),
         }
     }

@@ -401,5 +401,18 @@ fn emit_pat(pat: &Pat) -> String {
         }
         Pat::Ref(inner) => format!("&{}", emit_pat(inner)),
         Pat::Bind { name, pat } => format!("{} @ {}", name, emit_pat(pat)),
+        Pat::Slice { before, rest, has_rest, after } => {
+            let mut parts: Vec<String> = before.iter().map(emit_pat).collect();
+            if *has_rest {
+                let rest_str = if let Some(name) = rest {
+                    format!("{} @ ..", name)
+                } else {
+                    "..".to_string()
+                };
+                parts.push(rest_str);
+            }
+            parts.extend(after.iter().map(emit_pat));
+            format!("[{}]", parts.join(", "))
+        }
     }
 }

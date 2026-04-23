@@ -77,6 +77,9 @@ pub enum Pat {
     Range(Lit, Lit, bool),
     Ref(Box<Pat>),
     Bind { name: String, pat: Box<Pat> },  // name @ pat
+    /// Slice pattern: [a, b, rest @ .., z]
+    /// before = patterns before .., rest = optional binding for .., has_rest = .. was present, after = patterns after ..
+    Slice { before: Vec<Pat>, rest: Option<String>, has_rest: bool, after: Vec<Pat> },
 }
 
 #[derive(Debug, Clone)]

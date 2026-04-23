@@ -151,6 +151,21 @@ fn bind_pat(pat: &Pat, val: Value, env: &Rc<RefCell<Env>>) {
             env.borrow_mut().define(name, val.clone());
             bind_pat(pat, val, env);
         }
+        Pat::Slice { before, rest, has_rest: _, after } => {
+            if let Value::Vec(items) = val {
+                let after_start = items.len().saturating_sub(after.len());
+                for (i, p) in before.iter().enumerate() {
+                    if i < items.len() { bind_pat(p, items[i].clone(), env); }
+                }
+                for (i, p) in after.iter().enumerate() {
+                    if after_start + i < items.len() { bind_pat(p, items[after_start + i].clone(), env); }
+                }
+                if let Some(name) = rest {
+                    let rest_items = items[before.len().min(items.len())..after_start].to_vec();
+                    env.borrow_mut().define(name, Value::Vec(rest_items));
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1624,6 +1639,28 @@ impl Interpreter {
                 let lo_c = match eval_lit(lo) { Value::Char(c) => c, _ => return false };
                 let hi_c = match eval_lit(hi) { Value::Char(c) => c, _ => return false };
                 *c >= lo_c && if *inc { *c <= hi_c } else { *c < hi_c }
+            }
+            (Pat::Slice { before, rest, has_rest, after }, Value::Vec(items)) => {
+                if *has_rest {
+                    if items.len() < before.len() + after.len() { return false; }
+                } else {
+                    if items.len() != before.len() + after.len() { return false; }
+                }
+                // Match before patterns
+                for (i, pat) in before.iter().enumerate() {
+                    if !self.match_pat(pat, &items[i], env) { return false; }
+                }
+                // Match after patterns
+                let after_start = items.len() - after.len();
+                for (i, pat) in after.iter().enumerate() {
+                    if !self.match_pat(pat, &items[after_start + i], env) { return false; }
+                }
+                // Bind rest if named
+                if let Some(name) = rest {
+                    let rest_items = items[before.len()..after_start].to_vec();
+                    env.define(name, Value::Vec(rest_items));
+                }
+                true
             }
             _ => false,
         }
