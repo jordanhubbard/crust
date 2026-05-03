@@ -11,8 +11,10 @@ use crate::value::{CrustFn, Value};
 
 pub enum Signal {
     Return(Value),
-    Break(Option<Value>),
-    Continue,
+    /// Break with optional loop label and optional value.
+    Break(Option<String>, Option<Value>),
+    /// Continue with optional loop label.
+    Continue(Option<String>),
     Err(CrustError),
 }
 
@@ -279,6 +281,9 @@ pub struct Interpreter {
     pub mut_writebacks: Vec<(usize, Value)>,
     // Non-None while evaluating a Display::fmt call; write! appends here
     pub display_buf: Option<String>,
+    // The concrete type name currently in scope for `Self` resolution.
+    // Set by call_method_or_static when dispatching an impl method.
+    current_self_type: Option<String>,
 }
 
 impl Interpreter {
@@ -294,6 +299,7 @@ impl Interpreter {
             self_writeback: None,
             mut_writebacks: Vec::new(),
             display_buf: None,
+            current_self_type: None,
         }
     }
 
@@ -1042,16 +1048,16 @@ impl Interpreter {
                 Err(Signal::Return(val))
             }
 
-            Expr::Break(val_expr) => {
+            Expr::Break(label, val_expr) => {
                 let val = if let Some(e) = val_expr {
                     Some(self.eval_expr(e, env)?)
                 } else {
                     None
                 };
-                Err(Signal::Break(val))
+                Err(Signal::Break(label.clone(), val))
             }
 
-            Expr::Continue => Err(Signal::Continue),
+            Expr::Continue(label) => Err(Signal::Continue(label.clone())),
 
             Expr::Macro { name, args } => {
                 self.eval_macro(name, args, env)
@@ -1108,6 +1114,12 @@ impl Interpreter {
             }
 
             Expr::StructLit { name, fields } => {
+                // Resolve `Self` to the concrete implementing type in scope
+                let concrete_name = if name == "Self" {
+                    self.current_self_type.clone().unwrap_or_else(|| name.clone())
+                } else {
+                    name.clone()
+                };
                 let mut base_fields = HashMap::new();
                 let mut field_vals = HashMap::new();
                 for (fname, fexpr) in fields {
@@ -1126,7 +1138,7 @@ impl Interpreter {
                 let merged: HashMap<String, Value> = base_fields.into_iter()
                     .chain(field_vals)
                     .collect();
-                Ok(Value::Struct { type_name: name.clone(), fields: merged })
+                Ok(Value::Struct { type_name: concrete_name, fields: merged })
             }
 
             Expr::Array(elems) => {
@@ -1164,10 +1176,23 @@ impl Interpreter {
                 Ok(match (v, ty_name) {
                     (Value::Char(c), "i64"|"i32"|"u64"|"u32"|"u8"|"usize"|"isize") => Value::Int(c as i64),
                     (Value::Int(n), "char") => Value::Char(char::from_u32(n as u32).unwrap_or('\0')),
-                    (Value::Int(n), "u8") => Value::Int(n & 0xFF),
+                    // Unsigned integer truncation (wrapping cast, matching Rust's `as` semantics)
+                    (Value::Int(n), "u8")    => Value::Int((n as u8)    as i64),
+                    (Value::Int(n), "u16")   => Value::Int((n as u16)   as i64),
+                    (Value::Int(n), "u32")   => Value::Int((n as u32)   as i64),
+                    (Value::Int(n), "u64")   => Value::Int((n as u64)   as i64),
+                    (Value::Int(n), "usize") => Value::Int((n as usize) as i64),
+                    // Signed integer truncation
+                    (Value::Int(n), "i8")    => Value::Int((n as i8)    as i64),
+                    (Value::Int(n), "i16")   => Value::Int((n as i16)   as i64),
+                    (Value::Int(n), "i32")   => Value::Int((n as i32)   as i64),
+                    (Value::Int(n), "i64" | "isize") => Value::Int(n),
+                    // Float conversions
                     (Value::Int(n), "f64"|"f32") => Value::Float(n as f64),
+                    (Value::Float(f), "f32") => Value::Float((f as f32) as f64),
                     (Value::Float(f), "i64"|"i32"|"i16"|"i8"|"u64"|"u32"|"u16"|"u8"|"usize"|"isize") => Value::Int(f as i64),
-                    (Value::Bool(b), "i64"|"i32") => Value::Int(b as i64),
+                    // Bool to integer
+                    (Value::Bool(b), "i64"|"i32"|"i16"|"i8"|"u64"|"u32"|"u16"|"u8"|"usize"|"isize") => Value::Int(b as i64),
                     (other, _) => other,
                 })
             }
@@ -1212,7 +1237,11 @@ impl Interpreter {
 
     fn eval_macro(&mut self, name: &str, args: &[Expr], env: Rc<RefCell<Env>>) -> EvalResult {
         match name {
-            "__for__" => self.eval_for_loop(args, env),
+            "__for__" => self.eval_for_loop(args, None, env),
+            s if s.starts_with("__for__:") => {
+                let loop_label = Some(s["__for__:".len()..].to_string());
+                self.eval_for_loop(args, loop_label.as_deref(), env)
+            }
 
             "println" | "print" | "eprintln" | "eprint" => {
                 let text = self.eval_format_macro(args, env)?;
@@ -1432,7 +1461,7 @@ impl Interpreter {
         Ok(result)
     }
 
-    fn eval_for_loop(&mut self, args: &[Expr], env: Rc<RefCell<Env>>) -> EvalResult {
+    fn eval_for_loop(&mut self, args: &[Expr], loop_label: Option<&str>, env: Rc<RefCell<Env>>) -> EvalResult {
         // args: [pat_marker, iterable, body_block]
         if args.len() < 3 { return Ok(Value::Unit); }
 
@@ -1469,7 +1498,8 @@ impl Interpreter {
                 let end = if inclusive { end + 1 } else { end };
                 (start..end).map(Value::Int).collect()
             }
-            Value::Str(s) => s.chars().map(|c| Value::Str(c.to_string())).collect(),
+            // Bug fix: iterate over String yields Char values, not single-char Strings
+            Value::Str(s) => s.chars().map(Value::Char).collect(),
             Value::HashMap(m) => {
                 let mut pairs: Vec<_> = m.into_iter().collect();
                 pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -1489,8 +1519,12 @@ impl Interpreter {
             bind_pattern_simple(&var_name, item, &mut child.borrow_mut());
             match self.eval_block(&body, Rc::clone(&child)) {
                 Ok(_) => {}
-                Err(Signal::Break(_)) => {
-                    // Still need to capture remaining items unchanged for iter_mut
+                Err(Signal::Break(Some(ref lbl), _)) if loop_label.map_or(true, |l| l != lbl.as_str()) => {
+                    // Labeled break targeting an outer loop — propagate without iter_mut capture
+                    return Err(Signal::Break(Some(lbl.clone()), None));
+                }
+                Err(Signal::Break(_, _)) => {
+                    // Unlabeled break, or labeled break that matches this loop's label
                     if let Some(ref mut mv) = mutated {
                         if let Some(cur) = child.borrow().get(&var_name) {
                             mv.push(cur);
@@ -1498,7 +1532,11 @@ impl Interpreter {
                     }
                     break;
                 }
-                Err(Signal::Continue) => {
+                Err(Signal::Continue(Some(ref lbl))) if loop_label.map_or(true, |l| l != lbl.as_str()) => {
+                    // Labeled continue targeting an outer loop — propagate
+                    return Err(Signal::Continue(Some(lbl.clone())));
+                }
+                Err(Signal::Continue(_)) => {
                     if let Some(ref mut mv) = mutated {
                         if let Some(cur) = child.borrow().get(&var_name) {
                             mv.push(cur);
@@ -1529,10 +1567,15 @@ impl Interpreter {
     fn eval_match(&mut self, scrutinee_expr: &Expr, arms: &[MatchArm], env: Rc<RefCell<Env>>) -> EvalResult {
         let scrutinee = self.eval_expr(scrutinee_expr, Rc::clone(&env))?;
 
-        // Special case: loop sentinel from parser
+        // Special case: loop sentinel from parser (possibly labeled: __loop__ or __loop__:name)
         if let [arm] = arms {
-            if matches!(&arm.pat, Pat::Ident(s) if s == "__loop__") {
-                return self.eval_loop_body(&arm.body, env);
+            if let Pat::Ident(s) = &arm.pat {
+                if s == "__loop__" || s.starts_with("__loop__:") {
+                    let loop_label = if s.starts_with("__loop__:") {
+                        Some(s["__loop__:".len()..].to_string())
+                    } else { None };
+                    return self.eval_loop_body(&arm.body, loop_label.as_deref(), env);
+                }
             }
         }
 
@@ -1549,13 +1592,21 @@ impl Interpreter {
         Ok(Value::Unit)
     }
 
-    fn eval_loop_body(&mut self, body: &Expr, env: Rc<RefCell<Env>>) -> EvalResult {
+    fn eval_loop_body(&mut self, body: &Expr, loop_label: Option<&str>, env: Rc<RefCell<Env>>) -> EvalResult {
         loop {
             let child = Rc::new(RefCell::new(Env::child(Rc::clone(&env))));
             match self.eval_expr(body, child) {
                 Ok(_) => {}
-                Err(Signal::Break(v)) => return Ok(v.unwrap_or(Value::Unit)),
-                Err(Signal::Continue) => continue,
+                Err(Signal::Break(Some(ref lbl), _)) if loop_label.map_or(true, |l| l != lbl.as_str()) => {
+                    // Labeled break targeting an outer loop — propagate
+                    return Err(Signal::Break(Some(lbl.clone()), None));
+                }
+                Err(Signal::Break(_, v)) => return Ok(v.unwrap_or(Value::Unit)),
+                Err(Signal::Continue(Some(ref lbl))) if loop_label.map_or(true, |l| l != lbl.as_str()) => {
+                    // Labeled continue targeting an outer loop — propagate
+                    return Err(Signal::Continue(Some(lbl.clone())));
+                }
+                Err(Signal::Continue(_)) => continue,
                 Err(e) => return Err(e),
             }
         }
@@ -1808,15 +1859,26 @@ impl Interpreter {
         if candidates.len() == 1 {
             let fdef = candidates.into_iter().next().unwrap();
             let cfn = CrustFn { params: fdef.params, ret_ty: fdef.ret_ty, body: fdef.body, captured: None };
-            return self.call_crust_fn(&cfn, args, self_val);
+            // Track the concrete type so `Self` struct literals resolve correctly
+            let prev_self_type = self.current_self_type.replace(type_name.to_string());
+            let result = self.call_crust_fn(&cfn, args, self_val);
+            self.current_self_type = prev_self_type;
+            return result;
         } else if candidates.len() > 1 {
             // Multiple overloads: try each, return first success
             let mut last_err = None;
             for fdef in candidates {
                 let cfn = CrustFn { params: fdef.params, ret_ty: fdef.ret_ty, body: fdef.body, captured: None };
+                let prev_self_type = self.current_self_type.replace(type_name.to_string());
                 match self.call_crust_fn(&cfn, args.clone(), self_val.clone()) {
-                    Ok(v) => return Ok(v),
-                    Err(e) => last_err = Some(e),
+                    Ok(v) => {
+                        self.current_self_type = prev_self_type;
+                        return Ok(v);
+                    }
+                    Err(e) => {
+                        self.current_self_type = prev_self_type;
+                        last_err = Some(e);
+                    }
                 }
             }
             if let Some(e) = last_err { return Err(e); }
@@ -2229,5 +2291,107 @@ mod tests {
         }";
         let out = run(src).unwrap();
         assert_eq!(out, vec!["3"]);
+    }
+
+    // ── Bug fixes ────────────────────────────────────────────────────────────
+
+    /// Bug 1: `Self` used as a return type / struct constructor should work
+    /// (previously `Self` was lexed as the same token as `self`).
+    #[test]
+    fn self_type_return_and_constructor() {
+        let src = "
+        struct Counter { n: i64 }
+        impl Counter {
+            fn new() -> Self { Self { n: 0 } }
+            fn inc(&self) -> Self { Self { n: self.n + 1 } }
+        }
+        fn main() {
+            let c = Counter::new();
+            let c2 = c.inc();
+            println!(\"{}\", c2.n);
+        }";
+        let out = run(src).unwrap();
+        assert_eq!(out, vec!["1"]);
+    }
+
+    /// Bug 2: labeled break exits the correct (outer) loop.
+    #[test]
+    fn labeled_break_exits_outer_loop() {
+        let src = "
+        fn main() {
+            let mut found = 0;
+            'outer: for i in 0..5 {
+                for j in 0..5 {
+                    if i == 2 && j == 3 {
+                        found = i * 10 + j;
+                        break 'outer;
+                    }
+                }
+            }
+            println!(\"{}\", found);
+        }";
+        let out = run(src).unwrap();
+        assert_eq!(out, vec!["23"]);
+    }
+
+    /// Bug 2: labeled continue skips the correct (outer) loop iteration.
+    #[test]
+    fn labeled_continue_skips_outer_iteration() {
+        let src = "
+        fn main() {
+            let mut sum = 0;
+            'outer: for i in 0..4 {
+                for j in 0..4 {
+                    if j == 2 { continue 'outer; }
+                    sum += 1;
+                }
+            }
+            // Each outer iteration adds j=0 and j=1 (2 increments) → 4*2 = 8
+            println!(\"{}\", sum);
+        }";
+        let out = run(src).unwrap();
+        assert_eq!(out, vec!["8"]);
+    }
+
+    /// Bug 3: iterating over a String should yield `char` values, not single-char strings.
+    #[test]
+    fn for_loop_over_string_yields_chars() {
+        let src = "
+        fn main() {
+            let s = \"abc\";
+            for c in s.chars() {
+                println!(\"{}\", c);
+            }
+        }";
+        let out = run(src).unwrap();
+        assert_eq!(out, vec!["a", "b", "c"]);
+    }
+
+    /// Bug 4: integer `as` casts must truncate like Rust's wrapping cast.
+    #[test]
+    fn integer_cast_truncation() {
+        let src = "
+        fn main() {
+            let n: i64 = 300;
+            println!(\"{}\", n as u8);   // 44
+            println!(\"{}\", n as i8);   // 44
+            println!(\"{}\", 65535i64 as u16); // 65535
+            println!(\"{}\", 65536i64 as u16); // 0
+            println!(\"{}\", -1i64 as u32);    // 4294967295
+        }";
+        let out = run(src).unwrap();
+        assert_eq!(out, vec!["44", "44", "65535", "0", "4294967295"]);
+    }
+
+    /// Bug 5: `\\xNN` and `\\u{NNNN}` escape sequences in string literals.
+    #[test]
+    fn string_escape_sequences() {
+        let src = r#"fn main() {
+            println!("{}", "\x48\x65\x6C\x6C\x6F");
+            println!("{}", "\u{1F600}");
+        }"#;
+        let out = run(src).unwrap();
+        assert_eq!(out[0], "Hello");
+        assert_eq!(out[1], "😀");
     }
 }

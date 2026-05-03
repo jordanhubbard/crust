@@ -482,8 +482,9 @@ impl Parser {
             TokenKind::And | TokenKind::AndAnd => {
                 // `&&T` or `&T` — both become a single ref at Level 0
                 self.advance();
-                if matches!(self.peek(), TokenKind::Ident(_)) {
-                    // skip lifetime annotation if present
+                // skip lifetime annotation like `'a`
+                if matches!(self.peek(), TokenKind::Label(_)) {
+                    self.advance();
                 }
                 let mutable = self.eat(&TokenKind::Mut);
                 let inner = self.parse_ty()?;
@@ -556,6 +557,12 @@ impl Parser {
                     self.advance();
                     let mut args = Vec::new();
                     while !self.check(&TokenKind::Gt) && !matches!(self.peek(), TokenKind::Shr | TokenKind::Eof) {
+                        // Skip lifetime parameters like `'a`
+                        if matches!(self.peek(), TokenKind::Label(_)) {
+                            self.advance();
+                            self.eat(&TokenKind::Comma);
+                            continue;
+                        }
                         args.push(self.parse_ty()?);
                         if !self.eat(&TokenKind::Comma) { break; }
                     }
@@ -576,7 +583,9 @@ impl Parser {
                 while self.check(&TokenKind::Plus) {
                     self.advance(); // consume +
                     // skip lifetime bound like 'static
-                    if matches!(self.peek(), TokenKind::Ident(_)) {
+                    if matches!(self.peek(), TokenKind::Label(_)) {
+                        self.advance();
+                    } else if matches!(self.peek(), TokenKind::Ident(_)) {
                         let _ = self.parse_ty()?;
                     }
                 }
@@ -1115,12 +1124,22 @@ impl Parser {
             }
             TokenKind::Break => {
                 self.advance();
-                let val = if !matches!(self.peek(), TokenKind::Semi | TokenKind::RBrace | TokenKind::Comma | TokenKind::Eof) {
+                // Check for label: `break 'outer` or `break 'outer value`
+                let label = if matches!(self.peek(), TokenKind::Label(_)) {
+                    if let TokenKind::Label(l) = self.advance().clone() { Some(l) } else { None }
+                } else { None };
+                let val = if label.is_none() && !matches!(self.peek(), TokenKind::Semi | TokenKind::RBrace | TokenKind::Comma | TokenKind::Eof) {
                     Some(Box::new(self.parse_expr(0)?))
                 } else { None };
-                Ok(Expr::Break(val))
+                Ok(Expr::Break(label, val))
             }
-            TokenKind::Continue => { self.advance(); Ok(Expr::Continue) }
+            TokenKind::Continue => {
+                self.advance();
+                let label = if matches!(self.peek(), TokenKind::Label(_)) {
+                    if let TokenKind::Label(l) = self.advance().clone() { Some(l) } else { None }
+                } else { None };
+                Ok(Expr::Continue(label))
+            }
 
             // if expression
             TokenKind::If => {
@@ -1169,7 +1188,7 @@ impl Parser {
                     let scrutinee = self.parse_expr(0)?;
                     let body = self.parse_block()?;
                     // Desugar while-let to loop { match scrutinee { pat => body, _ => break } }
-                    let break_arm = MatchArm { pat: Pat::Wild, guard: None, body: Expr::Break(None) };
+                    let break_arm = MatchArm { pat: Pat::Wild, guard: None, body: Expr::Break(None, None) };
                     let match_arm = MatchArm { pat, guard: None, body: Expr::Block(body) };
                     let match_expr = Expr::Match { scrutinee: Box::new(scrutinee), arms: vec![match_arm, break_arm] };
                     return Ok(Expr::Match {
@@ -1186,7 +1205,7 @@ impl Parser {
                 // Desugar to loop { if !cond { break } body... }
                 let if_break = Expr::If {
                     cond: Box::new(Expr::Unary(UnOp::Not, cond)),
-                    then_block: Block { stmts: vec![Stmt::Semi(Expr::Break(None))], tail: None },
+                    then_block: Block { stmts: vec![Stmt::Semi(Expr::Break(None, None))], tail: None },
                     else_block: None,
                 };
                 let mut stmts = vec![Stmt::Expr(if_break)];
@@ -1222,6 +1241,84 @@ impl Parser {
                         body: Expr::Block(body),
                     }],
                 })
+            }
+
+            // labeled loop: 'outer: for / while / loop
+            TokenKind::Label(label_name) => {
+                let label_name = label_name.clone();
+                self.advance();
+                match self.peek().clone() {
+                    TokenKind::For => {
+                        self.advance();
+                        let pat = self.parse_pat()?;
+                        self.expect(&TokenKind::In)?;
+                        let iter = Box::new(self.parse_expr(0)?);
+                        let body = self.parse_block()?;
+                        Ok(Expr::Macro {
+                            name: format!("__for__:{}", label_name),
+                            args: vec![
+                                Expr::Block(Block {
+                                    stmts: vec![Stmt::Expr(Expr::Ident(format!("__pat__{}", pat_to_str(&pat))))],
+                                    tail: None,
+                                }),
+                                *iter,
+                                Expr::Block(body),
+                            ],
+                        })
+                    }
+                    TokenKind::While => {
+                        let sentinel = format!("__loop__:{}", label_name);
+                        self.advance();
+                        if self.check(&TokenKind::Let) {
+                            self.advance();
+                            let pat = self.parse_pat()?;
+                            self.expect(&TokenKind::Eq)?;
+                            let scrutinee = self.parse_expr(0)?;
+                            let body = self.parse_block()?;
+                            let break_arm = MatchArm { pat: Pat::Wild, guard: None, body: Expr::Break(None, None) };
+                            let match_arm = MatchArm { pat, guard: None, body: Expr::Block(body) };
+                            let match_expr = Expr::Match { scrutinee: Box::new(scrutinee), arms: vec![match_arm, break_arm] };
+                            return Ok(Expr::Match {
+                                scrutinee: Box::new(Expr::Lit(Lit::Bool(true))),
+                                arms: vec![MatchArm { pat: Pat::Ident(sentinel), guard: None, body: match_expr }],
+                            });
+                        }
+                        let cond = Box::new(self.parse_expr(0)?);
+                        let body_block = self.parse_block()?;
+                        let if_break = Expr::If {
+                            cond: Box::new(Expr::Unary(UnOp::Not, cond)),
+                            then_block: Block { stmts: vec![Stmt::Semi(Expr::Break(None, None))], tail: None },
+                            else_block: None,
+                        };
+                        let mut stmts = vec![Stmt::Expr(if_break)];
+                        stmts.extend(body_block.stmts);
+                        if let Some(tail) = body_block.tail { stmts.push(Stmt::Expr(*tail)); }
+                        Ok(Expr::Match {
+                            scrutinee: Box::new(Expr::Lit(Lit::Bool(true))),
+                            arms: vec![MatchArm {
+                                pat: Pat::Ident(sentinel),
+                                guard: None,
+                                body: Expr::Block(Block { stmts, tail: None }),
+                            }],
+                        })
+                    }
+                    TokenKind::Loop => {
+                        self.advance();
+                        let body = self.parse_block()?;
+                        Ok(Expr::Match {
+                            scrutinee: Box::new(Expr::Lit(Lit::Bool(true))),
+                            arms: vec![MatchArm {
+                                pat: Pat::Ident(format!("__loop__:{}", label_name)),
+                                guard: None,
+                                body: Expr::Block(body),
+                            }],
+                        })
+                    }
+                    _ => Err(CrustError::parse(
+                        format!("label `'{}` must precede a loop (`for`, `while`, or `loop`)", label_name),
+                        self.line(),
+                    )),
+                }
             }
 
             // for
