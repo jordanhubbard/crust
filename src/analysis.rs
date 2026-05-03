@@ -299,12 +299,13 @@ impl Analyzer {
                     format!("`#[pure]` function contains I/O macro `{}!()`", name),
                 ));
             }
-            // Unsafe blocks violate purity.
-            // NOTE: `unsafe { ... }` blocks are desugared to regular `Block` nodes by
-            // the parser (since unsafe blocks execute normally at all levels ≤ 3).
-            // A dedicated `Expr::Unsafe` variant would be needed for Level 4 to
-            // statically flag unsafe usage in `#[pure]` functions.  For now this is
-            // a known gap documented in the design spec (Stage 1, item 4).
+            Expr::Unsafe(block) => {
+                out.push(Diagnostic::error(
+                    DiagnosticKind::UnsafeUsage, fn_name,
+                    "`#[pure]` function contains an `unsafe` block",
+                ));
+                self.purity_in_block(block, fn_name, out);
+            }
             _ => recurse_expr(expr, |e| self.purity_in_expr(e, fn_name, out)),
         }
     }
@@ -364,6 +365,8 @@ impl Analyzer {
         }
         // as-casts are errors in LLM mode
         self.llm_cast_check(&f.body, &f.name, &mut out);
+        // unsafe blocks are errors in LLM mode
+        self.llm_unsafe_check(&f.body, &f.name, &mut out);
         // todo!/unimplemented!/unreachable! are errors in LLM mode
         self.llm_macro_check(&f.body, &f.name, &mut out);
         out
@@ -418,6 +421,30 @@ impl Analyzer {
         }
         recurse_expr(expr, |e| self.llm_macro_in_expr(e, fn_name, out));
     }
+
+    fn llm_unsafe_check(&self, block: &Block, fn_name: &str, out: &mut Vec<Diagnostic>) {
+        let stmts_exprs: Vec<&Expr> = block.stmts.iter().filter_map(|s| match s {
+            Stmt::Semi(e) | Stmt::Expr(e) => Some(e),
+            Stmt::Let { init: Some(e), .. } => Some(e),
+            _ => None,
+        }).collect();
+        for expr in stmts_exprs {
+            self.llm_unsafe_in_expr(expr, fn_name, out);
+        }
+        if let Some(tail) = &block.tail {
+            self.llm_unsafe_in_expr(tail, fn_name, out);
+        }
+    }
+
+    fn llm_unsafe_in_expr(&self, expr: &Expr, fn_name: &str, out: &mut Vec<Diagnostic>) {
+        if let Expr::Unsafe(_) = expr {
+            out.push(Diagnostic::error(
+                DiagnosticKind::LlmGuardrail, fn_name,
+                "--llm-mode: `unsafe` blocks are disallowed",
+            ));
+        }
+        recurse_expr(expr, |e| self.llm_unsafe_in_expr(e, fn_name, out));
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -432,7 +459,7 @@ fn is_nonzero_literal(expr: &Expr) -> bool {
 fn recurse_expr<F: FnMut(&Expr)>(expr: &Expr, mut f: F) {
     match expr {
         Expr::Unary(_, e) | Expr::Deref(e) | Expr::Try(e) | Expr::Await(e)
-            | Expr::Return(Some(e)) | Expr::Break(Some(e)) | Expr::Ref { expr: e, .. }
+            | Expr::Return(Some(e)) | Expr::Break(_, Some(e)) | Expr::Ref { expr: e, .. }
             => f(e),
         Expr::Binary(_, l, r) | Expr::Assign(l, r) | Expr::OpAssign(_, l, r)
             | Expr::Index(l, r) => { f(l); f(r); }
@@ -458,7 +485,7 @@ fn recurse_expr<F: FnMut(&Expr)>(expr: &Expr, mut f: F) {
                 f(&arm.body);
             }
         }
-        Expr::Block(b) => block_exprs(b).for_each(|e| f(e)),
+        Expr::Block(b) | Expr::Unsafe(b) => block_exprs(b).for_each(|e| f(e)),
         Expr::Closure { body, .. } => f(body),
         Expr::StructLit { fields, .. } => fields.iter().for_each(|(_, e)| f(e)),
         Expr::Array(elems) | Expr::Tuple(elems) | Expr::Macro { args: elems, .. }
@@ -469,7 +496,7 @@ fn recurse_expr<F: FnMut(&Expr)>(expr: &Expr, mut f: F) {
         }
         // Leaf nodes — no sub-expressions
         Expr::Lit(_) | Expr::Ident(_) | Expr::Path(_)
-            | Expr::Continue | Expr::Return(None) | Expr::Break(None) => {}
+            | Expr::Continue(_) | Expr::Return(None) | Expr::Break(_, None) => {}
     }
 }
 
@@ -480,4 +507,51 @@ fn block_exprs(block: &Block) -> impl Iterator<Item = &Expr> {
         _ => None,
     });
     stmt_exprs.chain(block.tail.iter().map(|e| e.as_ref()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+
+    fn parse(src: &str) -> Program {
+        let tokens = Lexer::new(src).tokenize().unwrap();
+        Parser::new(tokens).parse_program().unwrap()
+    }
+
+    #[test]
+    fn prove_mode_rejects_unsafe_in_pure_function() {
+        let program = parse(
+            r#"
+            #[pure]
+            fn f() -> i64 {
+                unsafe { 1 + 1 }
+            }
+            "#,
+        );
+        let diagnostics = Analyzer::new(StrictnessLevel::Prove, false).analyze_program(&program);
+
+        assert!(diagnostics.iter().any(|d|
+            d.is_error() && d.kind == DiagnosticKind::UnsafeUsage
+        ));
+    }
+
+    #[test]
+    fn llm_mode_rejects_unsafe_block() {
+        let program = parse(
+            r#"
+            fn f() {
+                unsafe { 1 + 1; }
+            }
+            "#,
+        );
+        let diagnostics = Analyzer::new(StrictnessLevel::Explore, true).analyze_program(&program);
+
+        assert!(diagnostics.iter().any(|d|
+            d.is_error()
+                && d.kind == DiagnosticKind::LlmGuardrail
+                && d.message.contains("unsafe")
+        ));
+    }
 }

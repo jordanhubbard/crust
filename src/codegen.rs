@@ -322,6 +322,13 @@ impl Codegen {
                 out
             }
 
+            Expr::Unsafe(block) => {
+                let mut out = "unsafe {\n".to_string();
+                out.push_str(&self.emit_block_body(block));
+                out.push('}');
+                out
+            }
+
             Expr::Return(val) => {
                 if let Some(v) = val { format!("return {}", self.emit_expr(v)) }
                 else { "return".to_string() }

@@ -947,7 +947,7 @@ impl Parser {
                     // Don't treat block-like exprs followed by `(` as function calls.
                     // e.g. `while {...} (2..=n).filter(...)` must NOT parse as `while_result(2..=n)`.
                     let is_block_like = matches!(&expr,
-                        Expr::Block(_) | Expr::If { .. } | Expr::Match { .. } | Expr::Macro { .. }
+                        Expr::Block(_) | Expr::Unsafe(_) | Expr::If { .. } | Expr::Match { .. } | Expr::Macro { .. }
                     );
                     if is_block_like { break; }
                     self.advance();
@@ -1111,7 +1111,7 @@ impl Parser {
             TokenKind::Unsafe => {
                 self.advance();
                 let block = self.parse_block()?;
-                Ok(Expr::Block(block))
+                Ok(Expr::Unsafe(block))
             }
 
             // Control flow
@@ -1854,24 +1854,46 @@ mod tests {
         Parser::new(tokens).parse_program().unwrap()
     }
 
+    fn read_example(name: &str) -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("examples")
+                .join(name),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn parses_fib() {
-        let src = std::fs::read_to_string("fib.crust").unwrap();
+        let src = read_example("fib.crust");
         let prog = parse(&src);
         assert_eq!(prog.len(), 2); // fib + main
     }
 
     #[test]
     fn parses_hello() {
-        let src = std::fs::read_to_string("hello.crust").unwrap();
+        let src = read_example("hello.crust");
         let prog = parse(&src);
         assert_eq!(prog.len(), 2); // greet + main
     }
 
     #[test]
     fn parses_point() {
-        let src = std::fs::read_to_string("point.crust").unwrap();
+        let src = read_example("point.crust");
         let prog = parse(&src);
         assert_eq!(prog.len(), 3); // Point struct + impl + main
+    }
+
+    #[test]
+    fn parses_all_examples() {
+        let examples_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+        for entry in std::fs::read_dir(examples_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("crust") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap();
+            parse(&src);
+        }
     }
 }

@@ -295,6 +295,12 @@ impl TypeChecker {
                     .unwrap_or(InferredType::Unit)
             }
 
+            Expr::Unsafe(block) => {
+                block.tail.as_ref()
+                    .map(|e| Self::infer_expr(e, env))
+                    .unwrap_or(InferredType::Unit)
+            }
+
             Expr::Call { func, .. } => {
                 let name = match func.as_ref() {
                     Expr::Path(parts) => parts.last().cloned().unwrap_or_default(),
@@ -326,7 +332,7 @@ impl TypeChecker {
 
             Expr::Cast(_, ty) => InferredType::from_ast_ty(ty),
 
-            Expr::Return(_) | Expr::Break(_) | Expr::Continue => InferredType::Never,
+            Expr::Return(_) | Expr::Break(..) | Expr::Continue(_) => InferredType::Never,
 
             Expr::Range { .. } => InferredType::Named("Range".into()),
 

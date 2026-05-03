@@ -36,6 +36,7 @@ pub enum Expr {
     If { cond: Box<Expr>, then_block: Block, else_block: Option<Box<Expr>> },
     Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
     Block(Block),
+    Unsafe(Block),
     Closure { params: Vec<ClosureParam>, body: Box<Expr> },
     StructLit { name: String, fields: Vec<(String, Expr)> },
     Array(Vec<Expr>),

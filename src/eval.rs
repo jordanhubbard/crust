@@ -1039,6 +1039,11 @@ impl Interpreter {
                 self.eval_block(block, child)
             }
 
+            Expr::Unsafe(block) => {
+                let child = Rc::new(RefCell::new(Env::child(Rc::clone(&env))));
+                self.eval_block(block, child)
+            }
+
             Expr::Return(val_expr) => {
                 let val = if let Some(e) = val_expr {
                     self.eval_expr(e, env)?
