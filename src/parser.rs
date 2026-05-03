@@ -1698,13 +1698,22 @@ fn parse_attr_content(content: &str) -> crate::ast::Attr {
         _ => {}
     }
     if let Some(inner) = s.strip_prefix("requires(").and_then(|t| t.strip_suffix(')')) {
-        if let Ok(expr) = parse_expr_str(inner) { return Attr::Requires(expr); }
+        match parse_expr_str(inner) {
+            Ok(expr) => return Attr::Requires(expr),
+            Err(e) => eprintln!("warning: failed to parse #[requires({})] predicate: {}", inner, e),
+        }
     }
     if let Some(inner) = s.strip_prefix("ensures(").and_then(|t| t.strip_suffix(')')) {
-        if let Ok(expr) = parse_expr_str(inner) { return Attr::Ensures(expr); }
+        match parse_expr_str(inner) {
+            Ok(expr) => return Attr::Ensures(expr),
+            Err(e) => eprintln!("warning: failed to parse #[ensures({})] predicate: {}", inner, e),
+        }
     }
     if let Some(inner) = s.strip_prefix("invariant(").and_then(|t| t.strip_suffix(')')) {
-        if let Ok(expr) = parse_expr_str(inner) { return Attr::Invariant(expr); }
+        match parse_expr_str(inner) {
+            Ok(expr) => return Attr::Invariant(expr),
+            Err(e) => eprintln!("warning: failed to parse #[invariant({})] predicate: {}", inner, e),
+        }
     }
     Attr::Unknown(content.to_string())
 }

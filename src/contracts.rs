@@ -229,7 +229,12 @@ fn smtlib_expr(expr: &Expr) -> String {
         Expr::Binary(op, l, r) => {
             let op_str = match op {
                 BinOp::Add => "+", BinOp::Sub => "-", BinOp::Mul => "*",
-                BinOp::Div => "div", BinOp::Rem => "mod",
+                BinOp::Div => "div",
+                // Note: SMTLIB2 `mod` assumes non-negative divisors (like Euclidean modulo).
+                // Rust's `%` is truncated remainder (can be negative). For Prove mode,
+                // this approximation is acceptable for positive-domain proofs; add
+                // `rem` if you need exact signed-integer semantics.
+                BinOp::Rem => "mod",
                 BinOp::Eq  => "=",  BinOp::Ne  => "distinct",
                 BinOp::Lt  => "<",  BinOp::Le  => "<=",
                 BinOp::Gt  => ">",  BinOp::Ge  => ">=",

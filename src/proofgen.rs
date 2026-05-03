@@ -69,8 +69,12 @@ fn emit_coq_enum(e: &EnumDef) -> String {
         match &v.data {
             VariantData::Unit => out.push_str(&format!("  | {}\n", v.name)),
             VariantData::Tuple(tys) => {
-                let args = tys.iter().map(coq_ty).collect::<Vec<_>>().join(" -> ");
-                out.push_str(&format!("  | {} : {} -> {}\n", v.name, args, e.name));
+                let args = tys.iter().map(coq_ty).collect::<Vec<_>>().join(" * ");
+                if tys.len() > 1 {
+                    out.push_str(&format!("  | {} : ({}) -> {}\n", v.name, args, e.name));
+                } else {
+                    out.push_str(&format!("  | {} : {} -> {}\n", v.name, args, e.name));
+                }
             }
             VariantData::Struct(fields) => {
                 let args = fields.iter()

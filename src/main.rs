@@ -105,8 +105,19 @@ fn parse_build_options(args: &[String]) -> Result<BuildOptions> {
             "--llm-mode"   => { opts.llm_mode   = true; i += 1; }
             "--verify"     => { opts.verify     = true; i += 1; }
             s if s.starts_with("--strict=") => {
-                let n: u8 = s["--strict=".len()..].parse().unwrap_or(0);
-                opts.level = StrictnessLevel::from_u8(n);
+                let suffix = &s["--strict=".len()..];
+                let n: u8 = match suffix.parse() {
+                    Ok(n) => n,
+                    Err(_) => {
+                        return Err(CrustError::runtime(
+                            format!("invalid --strict value {:?}; expected 0–4", suffix)
+                        ));
+                    }
+                };
+                if n > 4 {
+                    eprintln!("warning: --strict={} is above the maximum (4); clamping to 4", n);
+                }
+                opts.level = StrictnessLevel::from_u8(n.min(4));
                 i += 1;
             }
             arg => { opts.source_file = arg.to_string(); i += 1; }
@@ -362,11 +373,11 @@ fn build_verify_report(
                 f.is_async,
                 is_pure,
                 panic_free,
-                requires.iter().map(|s| format!("\"{}\"", s.replace('"', "\\\""))).collect::<Vec<_>>().join(", "),
-                ensures.iter().map(|s| format!("\"{}\"", s.replace('"', "\\\""))).collect::<Vec<_>>().join(", "),
-                proven.iter().map(|s| format!("\"{}\"", s.replace('"', "\\\""))).collect::<Vec<_>>().join(", "),
-                unproven.iter().map(|s| format!("\"{}\"", s.replace('"', "\\\""))).collect::<Vec<_>>().join(", "),
-                diag_strs.iter().map(|s| format!("\"{}\"", s.replace('"', "\\\""))).collect::<Vec<_>>().join(", "),
+                json_str_array(&requires),
+                json_str_array(&ensures),
+                json_str_array(&proven),
+                json_str_array(&unproven),
+                json_str_array(&diag_strs),
             ));
         }
     }
@@ -378,6 +389,15 @@ fn build_verify_report(
         diags.len() + type_diags.len(),
         vcs.len(),
     )
+}
+
+/// Format a slice of strings as a JSON array of string values,
+/// escaping interior double-quotes.
+fn json_str_array(items: &[String]) -> String {
+    items.iter()
+        .map(|s| format!("\"{}\"", s.replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // ── help / version ────────────────────────────────────────────────────────────

@@ -49,7 +49,8 @@ impl InferredType {
                 "char"  => InferredType::Char,
                 other   => InferredType::Named(other.to_string()),
             },
-            Ty::Unit | Ty::Never => InferredType::Unit,
+            Ty::Unit    => InferredType::Unit,
+        Ty::Never   => InferredType::Never,
             Ty::Ref(_, inner) | Ty::Ptr(_, inner) => {
                 InferredType::Ref(Box::new(InferredType::from_ast_ty(inner)))
             }
@@ -355,7 +356,7 @@ pub fn check_unannotated_params(
     level: StrictnessLevel,
     llm_mode: bool,
 ) -> Vec<TypeDiagnostic> {
-    if !llm_mode && level < StrictnessLevel::Prove { return vec![]; }
+    if !llm_mode || level < StrictnessLevel::Prove { return vec![]; }
 
     let mut diags = Vec::new();
     for item in items {

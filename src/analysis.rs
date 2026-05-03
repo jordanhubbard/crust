@@ -299,9 +299,12 @@ impl Analyzer {
                     format!("`#[pure]` function contains I/O macro `{}!()`", name),
                 ));
             }
-            // Unsafe blocks violate purity
-            // (unsafe blocks are desugared to regular blocks by the parser, so we can't detect
-            // them post-parse; this is a known limitation noted in the design doc)
+            // Unsafe blocks violate purity.
+            // NOTE: `unsafe { ... }` blocks are desugared to regular `Block` nodes by
+            // the parser (since unsafe blocks execute normally at all levels ≤ 3).
+            // A dedicated `Expr::Unsafe` variant would be needed for Level 4 to
+            // statically flag unsafe usage in `#[pure]` functions.  For now this is
+            // a known gap documented in the design spec (Stage 1, item 4).
             _ => recurse_expr(expr, |e| self.purity_in_expr(e, fn_name, out)),
         }
     }
