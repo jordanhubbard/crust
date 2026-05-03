@@ -14,10 +14,13 @@ pub enum TokenKind {
     Ident(String),
     MacroName(String),
 
+    // Outer attribute content captured verbatim (without `#[` / `]`)
+    Attr(String),
+
     // Keywords
-    As, Break, Const, Continue, Else, Enum, Fn, For, If, Impl,
+    As, Async, Break, Const, Continue, Else, Enum, Fn, For, If, Impl,
     In, Let, Loop, Match, Mod, Move, Mut, Pub, Ref, Return,
-    SelfKw, Static, Struct, Trait, Type, Use, Where, While,
+    SelfKw, Static, Struct, Trait, Type, Unsafe, Use, Where, While,
 
     // Operators
     Plus, Minus, Star, Slash, Percent,
@@ -32,6 +35,7 @@ pub enum TokenKind {
 
     // Punctuation
     At, Dot, DotDot, DotDotEq, Comma, Semi, Colon, ColonColon,
+    #[allow(dead_code)]
     Hash, Dollar, Question, Underscore,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
 
@@ -252,6 +256,7 @@ impl Lexer {
     fn keyword_or_ident(s: String) -> TokenKind {
         match s.as_str() {
             "as"       => TokenKind::As,
+            "async"    => TokenKind::Async,
             "break"    => TokenKind::Break,
             "const"    => TokenKind::Const,
             "continue" => TokenKind::Continue,
@@ -278,6 +283,7 @@ impl Lexer {
             "trait"    => TokenKind::Trait,
             "true"     => TokenKind::True,
             "type"     => TokenKind::Type,
+            "unsafe"   => TokenKind::Unsafe,
             "use"      => TokenKind::Use,
             "where"    => TokenKind::Where,
             "while"    => TokenKind::While,
@@ -337,21 +343,43 @@ impl Lexer {
                 c if c.is_ascii_digit() => self.read_number(c)?,
 
                 '#' => {
-                    // Skip attributes: #[...] and #![...]
                     self.skip_whitespace();
-                    if self.eat('!') { self.skip_whitespace(); }
-                    if self.eat('[') {
-                        let mut depth = 1;
-                        while depth > 0 {
-                            match self.advance() {
-                                None => break,
-                                Some('[') => depth += 1,
-                                Some(']') => depth -= 1,
-                                _ => {}
+                    // Inner attribute #![...] — skip entirely (crate-level directives)
+                    if self.peek() == Some('!') {
+                        self.advance();
+                        if self.eat('[') {
+                            let mut depth = 1;
+                            while depth > 0 {
+                                match self.advance() {
+                                    None => break,
+                                    Some('[') => depth += 1,
+                                    Some(']') => depth -= 1,
+                                    _ => {}
+                                }
                             }
                         }
+                        continue;
                     }
-                    continue;
+                    // Outer attribute #[content] — capture content verbatim as Attr token
+                    if self.eat('[') {
+                        let mut depth = 1usize;
+                        let mut content = String::new();
+                        loop {
+                            match self.advance() {
+                                None => break,
+                                Some('[') => { depth += 1; content.push('['); }
+                                Some(']') => {
+                                    depth -= 1;
+                                    if depth == 0 { break; }
+                                    content.push(']');
+                                }
+                                Some(c) => { content.push(c); }
+                            }
+                        }
+                        TokenKind::Attr(content.trim().to_string())
+                    } else {
+                        continue; // bare # with no bracket, skip
+                    }
                 }
 
                 c if c.is_alphabetic() || c == '_' => {

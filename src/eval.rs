@@ -1201,6 +1201,10 @@ impl Interpreter {
                     other => Ok(other),
                 }
             }
+
+            // `.await` — at Level 0-3, futures are evaluated synchronously (the inner
+            // expression IS the result; we don't need a real async runtime).
+            Expr::Await(inner) => self.eval_expr(inner, env),
         }
     }
 

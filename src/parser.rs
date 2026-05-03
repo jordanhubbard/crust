@@ -113,26 +113,50 @@ impl Parser {
         Ok(items)
     }
 
-    fn parse_item(&mut self) -> Result<Item> {
-        // skip outer attributes: #[...]
-        while self.check(&TokenKind::Hash) {
-            self.advance();
-            if self.eat(&TokenKind::LBracket) {
-                let mut depth = 1usize;
-                while depth > 0 {
-                    match self.peek() {
-                        TokenKind::LBracket => { self.advance(); depth += 1; }
-                        TokenKind::RBracket => { self.advance(); depth -= 1; }
-                        TokenKind::Eof => break,
-                        _ => { self.advance(); }
-                    }
+    /// Drain any leading `Attr(…)` tokens into a `Vec<crate::ast::Attr>`.
+    /// Unknown attributes (e.g. `derive(…)`, `allow(…)`) are stored verbatim
+    /// so they can be re-emitted by the code generator.
+    fn collect_attrs(&mut self) -> Vec<crate::ast::Attr> {
+        let mut attrs = Vec::new();
+        loop {
+            match self.peek().clone() {
+                TokenKind::Attr(content) => {
+                    self.advance();
+                    attrs.push(parse_attr_content(&content));
                 }
+                _ => break,
             }
         }
+        attrs
+    }
+
+    fn parse_item(&mut self) -> Result<Item> {
+        // Collect outer attributes: #[...]  (now emitted as Attr tokens by the lexer)
+        let attrs = self.collect_attrs();
+
         // skip visibility
         self.eat(&TokenKind::Pub);
+
+        // async fn
+        if self.check(&TokenKind::Async) {
+            self.advance();
+            if !self.check(&TokenKind::Fn) {
+                return Err(CrustError::parse("expected `fn` after `async`", self.line()));
+            }
+            self.advance();
+            let mut def = self.parse_fn_def()?;
+            def.attrs = attrs;
+            def.is_async = true;
+            return Ok(Item::Fn(def));
+        }
+
         match self.peek().clone() {
-            TokenKind::Fn     => { self.advance(); Ok(Item::Fn(self.parse_fn_def()?)) }
+            TokenKind::Fn     => {
+                self.advance();
+                let mut def = self.parse_fn_def()?;
+                def.attrs = attrs;
+                Ok(Item::Fn(def))
+            }
             TokenKind::Struct => { self.advance(); Ok(Item::Struct(self.parse_struct()?)) }
             TokenKind::Enum   => { self.advance(); Ok(Item::Enum(self.parse_enum()?)) }
             TokenKind::Impl   => { self.advance(); Ok(Item::Impl(self.parse_impl()?)) }
@@ -140,8 +164,14 @@ impl Parser {
             TokenKind::Const  => {
                 self.advance();
                 // `const fn` → treat as regular function
-                if self.check(&TokenKind::Fn) { self.advance(); Ok(Item::Fn(self.parse_fn_def()?)) }
-                else { self.parse_const() }
+                if self.check(&TokenKind::Fn) {
+                    self.advance();
+                    let mut def = self.parse_fn_def()?;
+                    def.attrs = attrs;
+                    Ok(Item::Fn(def))
+                } else {
+                    self.parse_const()
+                }
             }
             TokenKind::Type   => { self.advance(); self.parse_type_alias() }
             TokenKind::Static => {
@@ -163,7 +193,7 @@ impl Parser {
         let ret_ty = if self.eat(&TokenKind::Arrow) { Some(self.parse_ty()?) } else { None };
         self.skip_where();
         let body = self.parse_block()?;
-        Ok(FnDef { name, params, ret_ty, body })
+        Ok(FnDef { name, params, ret_ty, body, attrs: vec![], is_async: false })
     }
 
     fn parse_params(&mut self) -> Result<Vec<Param>> {
@@ -306,10 +336,15 @@ impl Parser {
         let mut methods = Vec::new();
         let mut consts = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
+            let attrs = self.collect_attrs();
             self.eat(&TokenKind::Pub);
+            let is_async = self.eat(&TokenKind::Async);
             if self.check(&TokenKind::Fn) {
                 self.advance();
-                methods.push(self.parse_fn_def()?);
+                let mut def = self.parse_fn_def()?;
+                def.attrs = attrs;
+                def.is_async = is_async;
+                methods.push(def);
             } else if self.check(&TokenKind::Const) {
                 self.advance(); // consume `const`
                 let const_name = self.expect_ident()?;
@@ -346,7 +381,9 @@ impl Parser {
         self.expect(&TokenKind::LBrace)?;
         let mut methods = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
+            let attrs = self.collect_attrs();
             self.eat(&TokenKind::Pub);
+            let is_async = self.eat(&TokenKind::Async);
             if self.check(&TokenKind::Fn) {
                 self.advance();
                 let fn_name = self.expect_ident()?;
@@ -359,7 +396,7 @@ impl Parser {
                 if self.check(&TokenKind::LBrace) {
                     // default method body
                     let body = self.parse_block()?;
-                    methods.push(FnDef { name: fn_name, params, ret_ty, body });
+                    methods.push(FnDef { name: fn_name, params, ret_ty, body, attrs, is_async });
                 } else {
                     // required method (no body) — skip the semicolon
                     self.eat(&TokenKind::Semi);
@@ -561,12 +598,15 @@ impl Parser {
         let mut tail: Option<Box<Expr>> = None;
 
         while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
-            // item-level declarations inside blocks
-            if matches!(self.peek(), TokenKind::Fn | TokenKind::Struct | TokenKind::Enum | TokenKind::Impl | TokenKind::Use | TokenKind::Const | TokenKind::Static)
+            // item-level declarations inside blocks (including async fn and attributed fns)
+            if matches!(self.peek(),
+                TokenKind::Fn | TokenKind::Struct | TokenKind::Enum | TokenKind::Impl
+                | TokenKind::Use | TokenKind::Const | TokenKind::Static
+                | TokenKind::Async | TokenKind::Attr(_))
                 || (self.check(&TokenKind::Pub) && {
                     let saved = self.pos;
                     self.advance();
-                    let is_item = matches!(self.peek(), TokenKind::Fn | TokenKind::Struct | TokenKind::Enum | TokenKind::Impl);
+                    let is_item = matches!(self.peek(), TokenKind::Fn | TokenKind::Struct | TokenKind::Enum | TokenKind::Impl | TokenKind::Async);
                     self.pos = saved;
                     is_item
                 })
@@ -840,6 +880,11 @@ impl Parser {
                         }
                         _ => {
                             let field = self.expect_ident()?;
+                            // `.await` — postfix await operator
+                            if field == "await" {
+                                expr = Expr::Await(Box::new(expr));
+                                continue;
+                            }
                             // turbofish: expr.method::<T>(args) — capture the full type path
                             let turbofish = if self.check(&TokenKind::ColonColon) {
                                 self.advance();
@@ -1041,6 +1086,21 @@ impl Parser {
 
             // Block expression
             TokenKind::LBrace => {
+                let block = self.parse_block()?;
+                Ok(Expr::Block(block))
+            }
+
+            // async { ... } and async move { ... } — execute synchronously at Level 0-3
+            TokenKind::Async => {
+                self.advance();
+                self.eat(&TokenKind::Move);
+                let block = self.parse_block()?;
+                Ok(Expr::Block(block))
+            }
+
+            // unsafe { ... } — execute normally at Level 0-3; flagged at Level 4
+            TokenKind::Unsafe => {
+                self.advance();
                 let block = self.parse_block()?;
                 Ok(Expr::Block(block))
             }
@@ -1620,8 +1680,51 @@ fn path_to_lit(path: &str) -> Option<Lit> {
     }
 }
 
-/// Returns true for block-statement expressions (for/while/loop) that always produce ()
-/// and should never be followed by a binary operator in statement position.
+/// Parse a single `Attr` token's content string into a structured `crate::ast::Attr`.
+///
+/// Well-known crust attributes:
+/// - `pure`                — marks a function as free of side effects
+/// - `requires(pred)`      — precondition expression
+/// - `ensures(pred)`       — postcondition expression
+/// - `invariant(pred)`     — loop / function invariant
+///
+/// All other attribute strings are stored as `Attr::Unknown` so the code
+/// generator can re-emit them verbatim (e.g. `derive(Clone, Debug)`).
+fn parse_attr_content(content: &str) -> crate::ast::Attr {
+    use crate::ast::Attr;
+    let s = content.trim();
+    match s {
+        "pure" => return Attr::Pure,
+        _ => {}
+    }
+    if let Some(inner) = s.strip_prefix("requires(").and_then(|t| t.strip_suffix(')')) {
+        match parse_expr_str(inner) {
+            Ok(expr) => return Attr::Requires(expr),
+            Err(e) => eprintln!("warning: failed to parse #[requires({})] predicate: {}", inner, e),
+        }
+    }
+    if let Some(inner) = s.strip_prefix("ensures(").and_then(|t| t.strip_suffix(')')) {
+        match parse_expr_str(inner) {
+            Ok(expr) => return Attr::Ensures(expr),
+            Err(e) => eprintln!("warning: failed to parse #[ensures({})] predicate: {}", inner, e),
+        }
+    }
+    if let Some(inner) = s.strip_prefix("invariant(").and_then(|t| t.strip_suffix(')')) {
+        match parse_expr_str(inner) {
+            Ok(expr) => return Attr::Invariant(expr),
+            Err(e) => eprintln!("warning: failed to parse #[invariant({})] predicate: {}", inner, e),
+        }
+    }
+    Attr::Unknown(content.to_string())
+}
+
+/// Re-tokenize and parse a short expression string (used for contract predicates).
+fn parse_expr_str(src: &str) -> crate::error::Result<crate::ast::Expr> {
+    let tokens = crate::lexer::Lexer::new(src).tokenize()?;
+    Parser::new(tokens).parse_expr(0)
+}
+
+
 fn is_block_stmt_expr(e: &crate::ast::Expr) -> bool {
     match e {
         crate::ast::Expr::Macro { name, .. } => {

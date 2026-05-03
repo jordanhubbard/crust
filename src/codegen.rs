@@ -1,12 +1,24 @@
 use crate::ast::*;
+use crate::strictness::StrictnessLevel;
 
 pub struct Codegen {
     indent: usize,
+    /// The strictness level controls which safety features and annotations are emitted.
+    pub level: StrictnessLevel,
+    /// When true, ownership-transfer comments are injected at every clone/move site,
+    /// making LLM-generated code auditable by human reviewers.
+    pub llm_mode: bool,
 }
 
 impl Codegen {
+    /// Kept for backward compatibility and direct test usage.
+    #[allow(dead_code)]
     pub fn new() -> Self {
-        Codegen { indent: 0 }
+        Codegen { indent: 0, level: StrictnessLevel::Explore, llm_mode: false }
+    }
+
+    pub fn with_level(level: StrictnessLevel) -> Self {
+        Codegen { indent: 0, level, llm_mode: false }
     }
 
     pub fn emit_program(&mut self, items: &[Item]) -> String {
@@ -49,7 +61,11 @@ impl Codegen {
 
     fn emit_struct(&mut self, s: &StructDef) -> String {
         let mut out = String::new();
-        out.push_str("#[derive(Clone, Debug, PartialEq)]\n");
+        // Level 0-2: auto-derive common traits so beginners don't hit E0277.
+        // Level 3+: no implicit derives; the developer controls the derive list.
+        if self.level < StrictnessLevel::Ship {
+            out.push_str("#[derive(Clone, Debug, PartialEq)]\n");
+        }
         out.push_str(&format!("struct {} {{\n", s.name));
         for (name, ty) in &s.fields {
             out.push_str(&format!("    {}: {},\n", name, self.emit_ty(ty)));
@@ -60,7 +76,9 @@ impl Codegen {
 
     fn emit_enum(&mut self, e: &EnumDef) -> String {
         let mut out = String::new();
-        out.push_str("#[derive(Clone, Debug, PartialEq)]\n");
+        if self.level < StrictnessLevel::Ship {
+            out.push_str("#[derive(Clone, Debug, PartialEq)]\n");
+        }
         out.push_str(&format!("enum {} {{\n", e.name));
         for v in &e.variants {
             out.push_str("    ");
@@ -106,6 +124,27 @@ impl Codegen {
 
     fn emit_fn(&mut self, f: &FnDef) -> String {
         let ind = self.indent_str();
+
+        // Emit attributes.  At Level 3+, re-emit all unknown attrs (e.g. derive, allow).
+        // Crust-specific attrs (requires/ensures/invariant/pure) are emitted as comments
+        // so the generated Rust is still valid.
+        let mut out = String::new();
+        for attr in &f.attrs {
+            match attr {
+                Attr::Pure =>
+                    out.push_str(&format!("{}// #[pure] — verified side-effect-free by Crust\n", ind)),
+                Attr::Requires(expr) =>
+                    out.push_str(&format!("{}// #[requires({})]\n", ind, self.emit_expr(expr))),
+                Attr::Ensures(expr) =>
+                    out.push_str(&format!("{}// #[ensures({})]\n", ind, self.emit_expr(expr))),
+                Attr::Invariant(expr) =>
+                    out.push_str(&format!("{}// #[invariant({})]\n", ind, self.emit_expr(expr))),
+                Attr::Unknown(s) if self.level >= StrictnessLevel::Ship =>
+                    out.push_str(&format!("{}#[{}]\n", ind, s)),
+                Attr::Unknown(_) => {} // lower levels: skip non-crust attrs (already derived)
+            }
+        }
+
         let params = f.params.iter().map(|p| {
             if p.is_self {
                 "&self".to_string()
@@ -122,7 +161,8 @@ impl Codegen {
             String::new()
         };
 
-        let mut out = format!("{}fn {}({}){} {{\n", ind, f.name, params, ret);
+        let async_kw = if f.is_async { "async " } else { "" };
+        out.push_str(&format!("{}{}fn {}({}){} {{\n", ind, async_kw, f.name, params, ret));
         self.indent += 1;
         for stmt in &f.body.stmts {
             out.push_str(&format!("{}{}\n", self.indent_str(), self.emit_stmt(stmt)));
@@ -151,8 +191,7 @@ impl Codegen {
             Stmt::Semi(e) => format!("{};", self.emit_expr(e)),
             Stmt::Expr(e) => self.emit_expr(e),
             Stmt::Item(item) => {
-                let mut cg = Codegen::new();
-                cg.indent = self.indent;
+                let mut cg = Codegen { indent: self.indent, level: self.level, llm_mode: self.llm_mode };
                 cg.emit_item(item)
             }
         }
@@ -179,15 +218,23 @@ impl Codegen {
             Ty::Generic(name, args) => {
                 format!("{}<{}>", name, args.iter().map(|a| self.emit_ty(a)).collect::<Vec<_>>().join(", "))
             }
+            Ty::Lifetime(lt) => format!("'{}", lt),
         }
     }
 
-    /// Emit expression with Level 0 clone() insertions where a move would occur
+    /// Emit expression with Level 0 clone() insertions where a move would occur.
+    /// In `--llm-mode`, annotate each clone with an ownership comment for auditability.
     fn emit_expr_level0(&self, expr: &Expr) -> String {
         match expr {
             // Variable references in non-trivial positions get .clone() at Level 0
             // to prevent move errors
-            Expr::Ident(name) => format!("{}.clone()", name),
+            Expr::Ident(name) => {
+                if self.llm_mode {
+                    format!("{}.clone() /* ownership: clone prevents move of `{}` */", name, name)
+                } else {
+                    format!("{}.clone()", name)
+                }
+            }
             _ => self.emit_expr(expr),
         }
     }
@@ -206,6 +253,22 @@ impl Codegen {
             }
 
             Expr::Binary(op, lhs, rhs) => {
+                // Level 4 (Prove): use checked arithmetic for +, -, * to surface overflows
+                // as explicit panics rather than silent wrapping/UB.
+                if self.level >= StrictnessLevel::Prove {
+                    let checked = match op {
+                        BinOp::Add => Some("checked_add"),
+                        BinOp::Sub => Some("checked_sub"),
+                        BinOp::Mul => Some("checked_mul"),
+                        _ => None,
+                    };
+                    if let Some(method) = checked {
+                        return format!(
+                            "{}.{}({}).expect(\"arithmetic overflow\")",
+                            self.emit_expr(lhs), method, self.emit_expr(rhs)
+                        );
+                    }
+                }
                 let op_str = match op {
                     BinOp::Add => "+", BinOp::Sub => "-", BinOp::Mul => "*",
                     BinOp::Div => "/", BinOp::Rem => "%",
@@ -354,6 +417,9 @@ impl Codegen {
 
             Expr::Deref(inner) => format!("*{}", self.emit_expr(inner)),
             Expr::Try(inner) => format!("{}?", self.emit_expr(inner)),
+
+            // `.await` — emitted directly; at Level 4 the caller already has async context.
+            Expr::Await(inner) => format!("{}.await", self.emit_expr(inner)),
         }
     }
 
