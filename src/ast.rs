@@ -50,6 +50,8 @@ pub enum Expr {
     Ref { mutable: bool, expr: Box<Expr> },
     Deref(Box<Expr>),
     Try(Box<Expr>),
+    /// `expr.await` — evaluated synchronously at Level 0-3; Level 4 requires explicit Future types.
+    Await(Box<Expr>),
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +84,7 @@ pub enum Pat {
     Slice { before: Vec<Pat>, rest: Option<String>, has_rest: bool, after: Vec<Pat> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Ty {
     Named(String),
     Ref(bool, Box<Ty>),
@@ -92,6 +94,10 @@ pub enum Ty {
     Never,
     Generic(String, Vec<Ty>),
     Ptr(bool, Box<Ty>),
+    /// Lifetime annotation, e.g. `'a` or `'static`.
+    /// Parsed at Level 2+ (Harden); currently stored but not emitted by the lexer at lower levels.
+    #[allow(dead_code)]
+    Lifetime(String),
 }
 
 #[derive(Debug, Clone)]
@@ -115,12 +121,35 @@ pub enum Item {
     TypeAlias { name: String, ty: Ty },
 }
 
+/// Crust-specific attributes parsed from `#[name]` or `#[name(expr)]` syntax.
+/// These are only meaningful to the Crust compiler; unknown attributes are
+/// stored as `Unknown` and round-tripped to the generated Rust output.
+#[derive(Debug, Clone)]
+pub enum Attr {
+    /// `#[requires(pred)]` — precondition that caller must satisfy on function entry.
+    Requires(Expr),
+    /// `#[ensures(pred)]` — postcondition that the function guarantees on return.
+    /// Inside the predicate, the identifier `result` refers to the return value.
+    Ensures(Expr),
+    /// `#[invariant(pred)]` — property that must hold throughout the function body.
+    Invariant(Expr),
+    /// `#[pure]` — function has no observable side effects (no I/O, no mutable
+    /// external state, no `unsafe`).  Enables equational reasoning.
+    Pure,
+    /// Any other attribute stored verbatim so we can re-emit it in codegen.
+    Unknown(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
     pub params: Vec<Param>,
     pub ret_ty: Option<Ty>,
     pub body: Block,
+    /// Crust-specific attributes collected from `#[...]` lines before this function.
+    pub attrs: Vec<Attr>,
+    /// Whether the function was declared `async fn`.
+    pub is_async: bool,
 }
 
 #[derive(Debug, Clone)]
