@@ -264,12 +264,17 @@ impl Codegen {
                 else { "return".to_string() }
             }
 
-            Expr::Break(val) => {
-                if let Some(v) = val { format!("break {}", self.emit_expr(v)) }
-                else { "break".to_string() }
+            Expr::Break(label, val) => {
+                let mut s = "break".to_string();
+                if let Some(l) = label { s.push_str(&format!(" '{}", l)); }
+                if let Some(v) = val { s.push_str(&format!(" {}", self.emit_expr(v))); }
+                s
             }
 
-            Expr::Continue => "continue".to_string(),
+            Expr::Continue(label) => {
+                if let Some(l) = label { format!("continue '{}", l) }
+                else { "continue".to_string() }
+            }
 
             Expr::Macro { name, args } => {
                 // Restore macro call syntax

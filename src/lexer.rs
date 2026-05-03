@@ -19,6 +19,10 @@ pub enum TokenKind {
     In, Let, Loop, Match, Mod, Move, Mut, Pub, Ref, Return,
     SelfKw, Static, Struct, Trait, Type, Use, Where, While,
 
+    /// Loop label token, emitted for both `'name:` (label declaration)
+    /// and `'name` (reference in `break`/`continue`).
+    Label(String),
+
     // Operators
     Plus, Minus, Star, Slash, Percent,
     Caret, And, Or,
@@ -137,6 +141,31 @@ impl Lexer {
             Some('"') => Ok('"'),
             Some('\'') => Ok('\''),
             Some('0') => Ok('\0'),
+            Some('x') => {
+                // \xNN — ASCII hex escape (2 hex digits)
+                let mut hex = String::new();
+                for _ in 0..2 {
+                    if self.peek().map_or(false, |c| c.is_ascii_hexdigit()) {
+                        hex.push(self.advance().unwrap());
+                    }
+                }
+                let code = u8::from_str_radix(&hex, 16).unwrap_or(0);
+                Ok(code as char)
+            }
+            Some('u') if self.peek() == Some('{') => {
+                // \u{HHHH} — Unicode scalar value
+                self.advance(); // consume '{'
+                let mut hex = String::new();
+                loop {
+                    match self.peek() {
+                        Some('}') => { self.advance(); break; }
+                        Some(c) if c.is_ascii_hexdigit() => { hex.push(self.advance().unwrap()); }
+                        _ => break,
+                    }
+                }
+                let code = u32::from_str_radix(&hex, 16).unwrap_or(0);
+                Ok(char::from_u32(code).unwrap_or('\u{FFFD}'))
+            }
             Some(c) => Ok(c),
             None => Err(CrustError::parse("unterminated escape", line)),
         }
@@ -272,7 +301,7 @@ impl Lexer {
             "pub"      => TokenKind::Pub,
             "ref"      => TokenKind::Ref,
             "return"   => TokenKind::Return,
-            "self" | "Self" => TokenKind::SelfKw,
+            "self" => TokenKind::SelfKw,
             "static"   => TokenKind::Static,
             "struct"   => TokenKind::Struct,
             "trait"    => TokenKind::Trait,
@@ -315,22 +344,24 @@ impl Lexer {
                         // '\n' style char literal
                         TokenKind::Char(self.read_char_lit()?)
                     } else {
-                        // lifetime or loop label: 'a, 'static, 'outer: for ...
-                        // consume the lifetime name
+                        // Lifetime or loop label: 'a, 'static, 'outer: for ...
+                        // Collect the name after the quote.
+                        let mut name = String::new();
                         if next.map_or(false, |c| c.is_alphabetic() || c == '_') {
                             while self.peek().map_or(false, |c| c.is_alphanumeric() || c == '_') {
-                                self.advance();
-                            }
-                            // If followed by ':', it's a loop label — skip the ':' too
-                            self.skip_whitespace();
-                            if self.peek() == Some(':') {
-                                // but not '::' (path separator)
-                                if self.peek2() != Some(':') {
-                                    self.advance(); // consume the ':'
-                                }
+                                name.push(self.advance().unwrap());
                             }
                         }
-                        continue; // skip lifetime/label tokens entirely
+                        // Consume a trailing colon that is NOT `::` (loop-label declaration).
+                        self.skip_whitespace();
+                        if self.peek() == Some(':') && self.peek2() != Some(':') {
+                            self.advance(); // consume ':'
+                        }
+                        // Emit a Label token so the parser can handle both loop-label
+                        // declarations ('outer: for ...) and label references (break 'outer).
+                        // Lifetime annotations in type position are skipped by parse_ty.
+                        if name.is_empty() { continue; }
+                        TokenKind::Label(name)
                     }
                 }
 
