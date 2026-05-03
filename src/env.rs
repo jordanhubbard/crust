@@ -1,6 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::cell::RefCell;
 
 use crate::value::Value;
 
@@ -12,11 +12,17 @@ pub struct Env {
 
 impl Env {
     pub fn new() -> Self {
-        Env { vars: HashMap::new(), parent: None }
+        Env {
+            vars: HashMap::new(),
+            parent: None,
+        }
     }
 
     pub fn child(parent: Rc<RefCell<Env>>) -> Self {
-        Env { vars: HashMap::new(), parent: Some(parent) }
+        Env {
+            vars: HashMap::new(),
+            parent: Some(parent),
+        }
     }
 
     pub fn get(&self, name: &str) -> Option<Value> {
@@ -49,8 +55,10 @@ impl Env {
     }
 
     pub fn has(&self, name: &str) -> bool {
-        if self.vars.contains_key(name) { return true; }
-        self.parent.as_ref().map_or(false, |p| p.borrow().has(name))
+        if self.vars.contains_key(name) {
+            return true;
+        }
+        self.parent.as_ref().is_some_and(|p| p.borrow().has(name))
     }
 
     pub fn all_names(&self) -> Vec<String> {
@@ -63,7 +71,9 @@ impl Env {
 }
 
 impl Default for Env {
-    fn default() -> Self { Env::new() }
+    fn default() -> Self {
+        Env::new()
+    }
 }
 
 #[cfg(test)]

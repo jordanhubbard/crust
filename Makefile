@@ -1,6 +1,7 @@
-.PHONY: build release install uninstall clean test run repl
+.PHONY: build release install uninstall clean test fmt fmt-check lint check coverage coverage-html run repl
 
 PREFIX ?= /usr/local
+CRUST_COVERAGE_MIN ?= 100
 
 build:
 	cargo build
@@ -20,6 +21,23 @@ clean:
 
 test:
 	cargo test
+
+fmt:
+	cargo fmt
+
+fmt-check:
+	cargo fmt -- --check
+
+lint:
+	cargo clippy --all-targets -- -D warnings
+
+check: fmt-check lint test
+
+coverage:
+	CRUST_COVERAGE_MIN=$(CRUST_COVERAGE_MIN) ./scripts/coverage.sh
+
+coverage-html:
+	CRUST_COVERAGE_MIN=$(CRUST_COVERAGE_MIN) ./scripts/coverage.sh --html
 
 # Convenience targets for quick testing
 run:

@@ -9,8 +9,8 @@ mod lexer;
 mod parser;
 mod proofgen;
 mod repl;
-mod strictness;
 mod stdlib;
+mod strictness;
 mod types;
 mod value;
 
@@ -26,18 +26,21 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let subcommand = args.get(1).map(|s| s.as_str());
     match subcommand {
-        Some("run")                          => run_cmd(&args[2..]),
-        Some("build")                        => build_cmd(&args[2..]),
-        Some("verify")                       => verify_cmd(&args[2..]),
-        Some("repl")                         => repl::run(),
-        Some("--help" | "-h" | "help")       => help(),
+        Some("run") => run_cmd(&args[2..]),
+        Some("build") => build_cmd(&args[2..]),
+        Some("verify") => verify_cmd(&args[2..]),
+        Some("repl") => repl::run(),
+        Some("--help" | "-h" | "help") => help(),
         Some("--version" | "-V" | "version") => version(),
         Some(other) => {
             eprintln!("crust: unknown subcommand '{}'\n", other);
             help();
             std::process::exit(1);
         }
-        None => { help(); std::process::exit(1); }
+        None => {
+            help();
+            std::process::exit(1);
+        }
     }
 }
 
@@ -46,7 +49,10 @@ fn main() {
 fn run_cmd(args: &[String]) {
     let path = match args.first() {
         Some(p) => p,
-        None => { eprintln!("usage: crust run <file.crust>"); std::process::exit(1); }
+        None => {
+            eprintln!("usage: crust run <file.crust>");
+            std::process::exit(1);
+        }
     };
     if let Err(e) = run_file(path) {
         eprintln!("error: {}", e);
@@ -67,24 +73,24 @@ fn run_file(path: &str) -> Result<()> {
 /// Options parsed from `crust build` arguments.
 struct BuildOptions {
     source_file: String,
-    output:      String,
-    emit_rs:     bool,
-    emit_proof:  bool,
-    level:       StrictnessLevel,
-    llm_mode:    bool,
-    verify:      bool,
+    output: String,
+    emit_rs: bool,
+    emit_proof: bool,
+    level: StrictnessLevel,
+    llm_mode: bool,
+    verify: bool,
 }
 
 impl Default for BuildOptions {
     fn default() -> Self {
         BuildOptions {
             source_file: String::new(),
-            output:      "a.out".into(),
-            emit_rs:     false,
-            emit_proof:  false,
-            level:       StrictnessLevel::Explore,
-            llm_mode:    false,
-            verify:      false,
+            output: "a.out".into(),
+            emit_rs: false,
+            emit_proof: false,
+            level: StrictnessLevel::Explore,
+            llm_mode: false,
+            verify: false,
         }
     }
 }
@@ -95,32 +101,51 @@ fn parse_build_options(args: &[String]) -> Result<BuildOptions> {
     while i < args.len() {
         match args[i].as_str() {
             "-o" | "--output" => {
-                opts.output = args.get(i + 1)
-                    .cloned()
-                    .ok_or_else(|| CrustError::runtime(format!("{} requires an argument", args[i])))?;
+                opts.output = args.get(i + 1).cloned().ok_or_else(|| {
+                    CrustError::runtime(format!("{} requires an argument", args[i]))
+                })?;
                 i += 2;
             }
-            "--emit-rs"    => { opts.emit_rs    = true; i += 1; }
-            "--emit-proof" => { opts.emit_proof = true; i += 1; }
-            "--llm-mode"   => { opts.llm_mode   = true; i += 1; }
-            "--verify"     => { opts.verify     = true; i += 1; }
+            "--emit-rs" => {
+                opts.emit_rs = true;
+                i += 1;
+            }
+            "--emit-proof" => {
+                opts.emit_proof = true;
+                i += 1;
+            }
+            "--llm-mode" => {
+                opts.llm_mode = true;
+                i += 1;
+            }
+            "--verify" => {
+                opts.verify = true;
+                i += 1;
+            }
             s if s.starts_with("--strict=") => {
                 let suffix = &s["--strict=".len()..];
                 let n: u8 = match suffix.parse() {
                     Ok(n) => n,
                     Err(_) => {
-                        return Err(CrustError::runtime(
-                            format!("invalid --strict value {:?}; expected 0–4", suffix)
-                        ));
+                        return Err(CrustError::runtime(format!(
+                            "invalid --strict value {:?}; expected 0–4",
+                            suffix
+                        )));
                     }
                 };
                 if n > 4 {
-                    eprintln!("warning: --strict={} is above the maximum (4); clamping to 4", n);
+                    eprintln!(
+                        "warning: --strict={} is above the maximum (4); clamping to 4",
+                        n
+                    );
                 }
                 opts.level = StrictnessLevel::from_u8(n.min(4));
                 i += 1;
             }
-            arg => { opts.source_file = arg.to_string(); i += 1; }
+            arg => {
+                opts.source_file = arg.to_string();
+                i += 1;
+            }
         }
     }
     if opts.source_file.is_empty() {
@@ -131,8 +156,11 @@ fn parse_build_options(args: &[String]) -> Result<BuildOptions> {
 
 fn build_cmd(args: &[String]) {
     let opts = match parse_build_options(args) {
-        Ok(o)  => o,
-        Err(e) => { eprintln!("error: {}", e); std::process::exit(1); }
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
     };
     if let Err(e) = build_file_with_opts(&opts) {
         eprintln!("error: {}", e);
@@ -157,9 +185,10 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
         }
     }
     if opts.level >= StrictnessLevel::Prove && error_count > 0 {
-        return Err(CrustError::runtime(
-            format!("{} analysis error(s) at --strict=4; fix them or lower --strict", error_count)
-        ));
+        return Err(CrustError::runtime(format!(
+            "{} analysis error(s) at --strict=4; fix them or lower --strict",
+            error_count
+        )));
     }
 
     // ── Type inference pass ───────────────────────────────────────────────────
@@ -228,15 +257,21 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
     // ── Invoke rustc ─────────────────────────────────────────────────────────
     let status = Command::new("rustc")
         .arg(&tmp_rs)
-        .arg("-o").arg(&opts.output)
-        .arg("-C").arg("opt-level=2")
+        .arg("-o")
+        .arg(&opts.output)
+        .arg("-C")
+        .arg("opt-level=2")
         .status()
         .map_err(|e| CrustError::runtime(format!("rustc not found: {}", e)))?;
 
     let _ = fs::remove_file(&tmp_rs);
 
     if status.success() {
-        eprintln!("   Compiled crust v{} ({})", env!("CARGO_PKG_VERSION"), opts.level);
+        eprintln!(
+            "   Compiled crust v{} ({})",
+            env!("CARGO_PKG_VERSION"),
+            opts.level
+        );
         eprintln!("    Finished `release` profile [optimized]");
         eprintln!("      Binary: {}", Path::new(&opts.output).display());
         Ok(())
@@ -265,21 +300,33 @@ fn build_file(path: &str, output: &str, emit_rs: bool) -> Result<()> {
 /// `rustc`.  Exit code 0 means no errors; non-zero means at least one.
 fn verify_cmd(args: &[String]) {
     let opts = match parse_build_options(args) {
-        Ok(o)  => o,
-        Err(e) => { eprintln!("error: {}", e); std::process::exit(1); }
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
     };
 
     let source = match fs::read_to_string(&opts.source_file) {
-        Ok(s)  => s,
-        Err(e) => { eprintln!("error: {}", e); std::process::exit(1); }
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
     };
     let tokens = match lexer::Lexer::new(&source).tokenize() {
-        Ok(t)  => t,
-        Err(e) => { eprintln!("parse error: {}", e); std::process::exit(1); }
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("parse error: {}", e);
+            std::process::exit(1);
+        }
     };
     let program = match parser::Parser::new(tokens).parse_program() {
-        Ok(p)  => p,
-        Err(e) => { eprintln!("parse error: {}", e); std::process::exit(1); }
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("parse error: {}", e);
+            std::process::exit(1);
+        }
     };
 
     let analyzer = analysis::Analyzer::new(opts.level, opts.llm_mode);
@@ -292,8 +339,12 @@ fn verify_cmd(args: &[String]) {
         let lean = proofgen::LeanEmitter::emit_program(&program, &vcs);
         let coq_path = Path::new(&opts.source_file).with_extension("v");
         let lean_path = Path::new(&opts.source_file).with_extension("lean");
-        if let Err(e) = fs::write(&coq_path, &coq) { eprintln!("warning: {}", e); }
-        if let Err(e) = fs::write(&lean_path, &lean) { eprintln!("warning: {}", e); }
+        if let Err(e) = fs::write(&coq_path, &coq) {
+            eprintln!("warning: {}", e);
+        }
+        if let Err(e) = fs::write(&lean_path, &lean) {
+            eprintln!("warning: {}", e);
+        }
         eprintln!("   Emitted  {}", coq_path.display());
         eprintln!("   Emitted  {}", lean_path.display());
     }
@@ -315,20 +366,20 @@ fn build_verify_report(
     type_diags: &[types::TypeDiagnostic],
     vcs: &[contracts::VerifCondition],
 ) -> String {
-    use ast::{Item, Attr};
+    use ast::{Attr, Item};
 
     let mut fn_reports: Vec<String> = Vec::new();
 
     for item in program {
         if let Item::Fn(f) = item {
             let mut requires: Vec<String> = Vec::new();
-            let mut ensures:  Vec<String> = Vec::new();
+            let mut ensures: Vec<String> = Vec::new();
             let is_pure = f.attrs.iter().any(|a| matches!(a, Attr::Pure));
 
             for attr in &f.attrs {
                 match attr {
                     Attr::Requires(e) => requires.push(format!("{:?}", e)),
-                    Attr::Ensures(e)  => ensures.push(format!("{:?}", e)),
+                    Attr::Ensures(e) => ensures.push(format!("{:?}", e)),
                     _ => {}
                 }
             }
@@ -340,20 +391,24 @@ fn build_verify_report(
             let fn_vcs: Vec<&contracts::VerifCondition> =
                 vcs.iter().filter(|v| v.fn_name == f.name).collect();
 
-            let panic_free = !fn_diags.iter().any(|d|
-                matches!(d.kind, analysis::DiagnosticKind::PotentialPanic));
+            let panic_free = !fn_diags
+                .iter()
+                .any(|d| matches!(d.kind, analysis::DiagnosticKind::PotentialPanic));
 
-            let proven: Vec<String> = fn_vcs.iter()
+            let proven: Vec<String> = fn_vcs
+                .iter()
                 .filter(|v| matches!(v.status, contracts::VcStatus::Proved))
                 .map(|v| v.expr.clone())
                 .collect();
-            let unproven: Vec<String> = fn_vcs.iter()
+            let unproven: Vec<String> = fn_vcs
+                .iter()
                 .filter(|v| !matches!(v.status, contracts::VcStatus::Proved))
                 .map(|v| format!("{}: {}", v.kind_str(), v.expr))
                 .collect();
 
-            let diag_strs: Vec<String> = fn_diags.iter()
-                .map(|d| format!("{}", d.format()))
+            let diag_strs: Vec<String> = fn_diags
+                .iter()
+                .map(|d| d.format().to_string())
                 .chain(fn_type_diags.iter().map(|d| d.message.clone()))
                 .collect();
 
@@ -394,7 +449,8 @@ fn build_verify_report(
 /// Format a slice of strings as a JSON array of string values,
 /// escaping interior double-quotes.
 fn json_str_array(items: &[String]) -> String {
-    items.iter()
+    items
+        .iter()
         .map(|s| format!("\"{}\"", s.replace('"', "\\\"")))
         .collect::<Vec<_>>()
         .join(", ")

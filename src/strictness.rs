@@ -13,9 +13,9 @@ pub enum StrictnessLevel {
     #[default]
     Explore = 0,
     Develop = 1,
-    Harden  = 2,
-    Ship    = 3,
-    Prove   = 4,
+    Harden = 2,
+    Ship = 3,
+    Prove = 4,
 }
 
 impl StrictnessLevel {
@@ -38,9 +38,9 @@ impl StrictnessLevel {
         match self {
             Self::Explore => "Explore",
             Self::Develop => "Develop",
-            Self::Harden  => "Harden",
-            Self::Ship    => "Ship",
-            Self::Prove   => "Prove",
+            Self::Harden => "Harden",
+            Self::Ship => "Ship",
+            Self::Prove => "Prove",
         }
     }
 
@@ -49,9 +49,9 @@ impl StrictnessLevel {
         match self {
             Self::Explore => "no borrow checker, implicit Clone (default)",
             Self::Develop => "warnings on moves, type hints",
-            Self::Harden  => "borrow checker active, explicit lifetimes",
-            Self::Ship    => "full rustc parity",
-            Self::Prove   => "formal verification: contracts, overflow checks, panic-freedom proofs",
+            Self::Harden => "borrow checker active, explicit lifetimes",
+            Self::Ship => "full rustc parity",
+            Self::Prove => "formal verification: contracts, overflow checks, panic-freedom proofs",
         }
     }
 }

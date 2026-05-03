@@ -16,7 +16,10 @@ pub type Result<T> = std::result::Result<T, CrustError>;
 
 impl CrustError {
     pub fn parse(msg: impl Into<String>, line: usize) -> Self {
-        CrustError::Parse { msg: msg.into(), line }
+        CrustError::Parse {
+            msg: msg.into(),
+            line,
+        }
     }
 
     pub fn runtime(msg: impl Into<String>) -> Self {

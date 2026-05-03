@@ -159,6 +159,11 @@ crust build hello.crust -o app  # compile to native binary
 crust build --emit-rs lib.crust # see the Rust that Crust generates
 ```
 
+## Development
+
+Run `make check` before closing code changes. See [docs/testing.md](docs/testing.md)
+for the TDD and coverage policy.
+
 ---
 
 ## Current Status

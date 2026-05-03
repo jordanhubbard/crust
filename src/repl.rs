@@ -1,13 +1,13 @@
-use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
-use std::rc::Rc;
+use rustyline::DefaultEditor;
 use std::cell::RefCell;
+use std::rc::Rc;
 
+use crate::ast::Stmt;
 use crate::env::Env;
 use crate::eval::Interpreter;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
-use crate::ast::Stmt;
 
 fn history_path() -> Option<std::path::PathBuf> {
     dirs::home_dir().map(|h| h.join(".crust_history"))
@@ -23,7 +23,10 @@ pub fn run() {
     let mut interp = Interpreter::new();
     let env = Rc::new(RefCell::new(Env::new()));
 
-    println!("crust {} — Rust interpreter (Level 0)", env!("CARGO_PKG_VERSION"));
+    println!(
+        "crust {} — Rust interpreter (Level 0)",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("Type :help for commands, :quit to exit.\n");
 
     let mut pending = String::new();
@@ -37,15 +40,27 @@ pub fn run() {
                 println!("Bye.");
                 break;
             }
-            Err(e) => { eprintln!("error: {}", e); break; }
+            Err(e) => {
+                eprintln!("error: {}", e);
+                break;
+            }
         };
 
         let trimmed = line.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
 
         match trimmed {
-            ":quit" | ":exit" | ":q" => { println!("Bye."); break; }
-            ":clear" => { pending.clear(); depth = 0; continue; }
+            ":quit" | ":exit" | ":q" => {
+                println!("Bye.");
+                break;
+            }
+            ":clear" => {
+                pending.clear();
+                depth = 0;
+                continue;
+            }
             ":help" => {
                 print_help();
                 rl.add_history_entry(trimmed).ok();
@@ -63,7 +78,8 @@ pub fn run() {
                     if let Ok(prog) = Parser::new(tokens).parse_program() {
                         if let Some(crate::ast::Item::Fn(fndef)) = prog.first() {
                             if let Some(tail) = &fndef.body.tail {
-                                let child = Rc::new(RefCell::new(crate::env::Env::child(Rc::clone(&env))));
+                                let child =
+                                    Rc::new(RefCell::new(crate::env::Env::child(Rc::clone(&env))));
                                 match interp.eval_expr(tail, child) {
                                     Ok(v) => println!("{}", v.type_name()),
                                     Err(_) => eprintln!("error evaluating expression"),
@@ -83,7 +99,9 @@ pub fn run() {
         depth += trimmed.chars().filter(|&c| c == '{').count();
         depth = depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
 
-        if depth > 0 { continue; }
+        if depth > 0 {
+            continue;
+        }
 
         let src = std::mem::take(&mut pending);
         rl.add_history_entry(src.trim()).ok();
@@ -188,7 +206,8 @@ fn eval_repl_input(
             match stmt {
                 Stmt::Let { name, init, .. } => {
                     let val = if let Some(expr) = init {
-                        interp.eval_expr(expr, Rc::clone(&child))
+                        interp
+                            .eval_expr(expr, Rc::clone(&child))
                             .map_err(|s| match s {
                                 crate::eval::Signal::Err(e) => e,
                                 _ => crate::error::CrustError::runtime("unexpected control flow"),
@@ -198,9 +217,12 @@ fn eval_repl_input(
                     };
                     env.borrow_mut().define(name, val);
                 }
-                Stmt::Item(item) => { interp.register_item_pub(item.clone())?; }
+                Stmt::Item(item) => {
+                    interp.register_item_pub(item.clone())?;
+                }
                 other => {
-                    interp.eval_stmt_pub(other, Rc::clone(&child))
+                    interp
+                        .eval_stmt_pub(other, Rc::clone(&child))
                         .map_err(|s| match s {
                             crate::eval::Signal::Err(e) => e,
                             _ => crate::error::CrustError::runtime("unexpected control flow"),
@@ -210,11 +232,10 @@ fn eval_repl_input(
         }
 
         if let Some(tail) = &fndef.body.tail {
-            let val = interp.eval_expr(tail, child)
-                .map_err(|s| match s {
-                    crate::eval::Signal::Err(e) => e,
-                    _ => crate::error::CrustError::runtime("unexpected control flow"),
-                })?;
+            let val = interp.eval_expr(tail, child).map_err(|s| match s {
+                crate::eval::Signal::Err(e) => e,
+                _ => crate::error::CrustError::runtime("unexpected control flow"),
+            })?;
             return Ok(Some(val));
         }
     }

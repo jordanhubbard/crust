@@ -1,4 +1,3 @@
-
 #![allow(dead_code)]
 
 //! Static analysis passes for Crust.
@@ -40,8 +39,8 @@ pub enum DiagnosticKind {
 
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
-    pub kind:     DiagnosticKind,
-    pub message:  String,
+    pub kind: DiagnosticKind,
+    pub message: String,
     /// Name of the enclosing function (empty string = top-level).
     pub function: String,
     /// Whether this is a hard error (vs a warning).
@@ -50,13 +49,25 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     fn error(kind: DiagnosticKind, function: &str, msg: impl Into<String>) -> Self {
-        Diagnostic { kind, message: msg.into(), function: function.to_string(), error: true }
+        Diagnostic {
+            kind,
+            message: msg.into(),
+            function: function.to_string(),
+            error: true,
+        }
     }
     fn warning(kind: DiagnosticKind, function: &str, msg: impl Into<String>) -> Self {
-        Diagnostic { kind, message: msg.into(), function: function.to_string(), error: false }
+        Diagnostic {
+            kind,
+            message: msg.into(),
+            function: function.to_string(),
+            error: false,
+        }
     }
 
-    pub fn is_error(&self) -> bool { self.error }
+    pub fn is_error(&self) -> bool {
+        self.error
+    }
 
     pub fn format(&self) -> String {
         let sev = if self.error { "error" } else { "warning" };
@@ -71,7 +82,7 @@ impl Diagnostic {
 // ── Analyzer ─────────────────────────────────────────────────────────────────
 
 pub struct Analyzer {
-    level:    StrictnessLevel,
+    level: StrictnessLevel,
     llm_mode: bool,
 }
 
@@ -103,7 +114,10 @@ impl Analyzer {
         if self.level >= StrictnessLevel::Develop {
             let panic_sites = self.collect_panic_sites(&f.body, &f.name);
             if self.level >= StrictnessLevel::Prove {
-                diags.extend(panic_sites.into_iter().map(|mut d| { d.error = true; d }));
+                diags.extend(panic_sites.into_iter().map(|mut d| {
+                    d.error = true;
+                    d
+                }));
             } else {
                 diags.extend(panic_sites);
             }
@@ -113,7 +127,10 @@ impl Analyzer {
         if self.level >= StrictnessLevel::Develop {
             let overflow_sites = self.collect_overflow_sites(&f.body, &f.name);
             if self.level >= StrictnessLevel::Prove {
-                diags.extend(overflow_sites.into_iter().map(|mut d| { d.error = true; d }));
+                diags.extend(overflow_sites.into_iter().map(|mut d| {
+                    d.error = true;
+                    d
+                }));
             } else {
                 diags.extend(overflow_sites);
             }
@@ -153,10 +170,14 @@ impl Analyzer {
 
     fn panic_in_stmt(&self, stmt: &Stmt, fn_name: &str, out: &mut Vec<Diagnostic>) {
         match stmt {
-            Stmt::Let { init: Some(e), .. } |
-            Stmt::Semi(e) |
-            Stmt::Expr(e) => self.panic_in_expr(e, fn_name, out),
-            Stmt::LetPat { init: Some(e), else_block, .. } => {
+            Stmt::Let { init: Some(e), .. } | Stmt::Semi(e) | Stmt::Expr(e) => {
+                self.panic_in_expr(e, fn_name, out)
+            }
+            Stmt::LetPat {
+                init: Some(e),
+                else_block,
+                ..
+            } => {
                 self.panic_in_expr(e, fn_name, out);
                 if let Some(blk) = else_block {
                     out.extend(self.collect_panic_sites(blk, fn_name));
@@ -172,7 +193,8 @@ impl Analyzer {
             // .unwrap() and .expect() can panic
             Expr::MethodCall { method, .. } if method == "unwrap" => {
                 out.push(Diagnostic::warning(
-                    DiagnosticKind::PotentialPanic, fn_name,
+                    DiagnosticKind::PotentialPanic,
+                    fn_name,
                     "`.unwrap()` can panic on `None`/`Err`; consider using `?` or `.unwrap_or`",
                 ));
             }
@@ -186,7 +208,8 @@ impl Analyzer {
             // Index operations can panic (out of bounds)
             Expr::Index(..) => {
                 out.push(Diagnostic::warning(
-                    DiagnosticKind::PotentialPanic, fn_name,
+                    DiagnosticKind::PotentialPanic,
+                    fn_name,
                     "index operation `[..]` can panic on out-of-bounds access; consider `.get()`",
                 ));
             }
@@ -195,7 +218,8 @@ impl Analyzer {
             Expr::Binary(BinOp::Div | BinOp::Rem, _, rhs) => {
                 if !is_nonzero_literal(rhs) {
                     out.push(Diagnostic::warning(
-                        DiagnosticKind::PotentialPanic, fn_name,
+                        DiagnosticKind::PotentialPanic,
+                        fn_name,
                         "division / remainder may panic if denominator is zero; \
                          consider `checked_div` or asserting `divisor != 0`",
                     ));
@@ -204,11 +228,14 @@ impl Analyzer {
 
             // Macro calls: panic!, unreachable!, todo!, unimplemented!
             Expr::Macro { name, .. }
-                if matches!(name.as_str(),
-                    "panic" | "unreachable" | "todo" | "unimplemented") =>
+                if matches!(
+                    name.as_str(),
+                    "panic" | "unreachable" | "todo" | "unimplemented"
+                ) =>
             {
                 out.push(Diagnostic::warning(
-                    DiagnosticKind::PotentialPanic, fn_name,
+                    DiagnosticKind::PotentialPanic,
+                    fn_name,
                     format!("`{}!()` always panics", name),
                 ));
             }
@@ -233,9 +260,9 @@ impl Analyzer {
 
     fn overflow_in_stmt(&self, stmt: &Stmt, fn_name: &str, out: &mut Vec<Diagnostic>) {
         match stmt {
-            Stmt::Let { init: Some(e), .. } |
-            Stmt::Semi(e) |
-            Stmt::Expr(e) => self.overflow_in_expr(e, fn_name, out),
+            Stmt::Let { init: Some(e), .. } | Stmt::Semi(e) | Stmt::Expr(e) => {
+                self.overflow_in_expr(e, fn_name, out)
+            }
             Stmt::LetPat { init: Some(e), .. } => self.overflow_in_expr(e, fn_name, out),
             _ => {}
         }
@@ -244,13 +271,22 @@ impl Analyzer {
     fn overflow_in_expr(&self, expr: &Expr, fn_name: &str, out: &mut Vec<Diagnostic>) {
         match expr {
             Expr::Binary(op @ (BinOp::Add | BinOp::Sub | BinOp::Mul), lhs, rhs) => {
-                let op_str = match op { BinOp::Add => "+", BinOp::Sub => "-", _ => "*" };
+                let op_str = match op {
+                    BinOp::Add => "+",
+                    BinOp::Sub => "-",
+                    _ => "*",
+                };
                 out.push(Diagnostic::warning(
-                    DiagnosticKind::ArithmeticOverflow, fn_name,
+                    DiagnosticKind::ArithmeticOverflow,
+                    fn_name,
                     format!(
                         "bare `{}` may overflow; at --strict=4 use `checked_{}`",
                         op_str,
-                        match op { BinOp::Add => "add", BinOp::Sub => "sub", _ => "mul" }
+                        match op {
+                            BinOp::Add => "add",
+                            BinOp::Sub => "sub",
+                            _ => "mul",
+                        }
                     ),
                 ));
                 self.overflow_in_expr(lhs, fn_name, out);
@@ -258,7 +294,8 @@ impl Analyzer {
             }
             Expr::Cast(inner, _) => {
                 out.push(Diagnostic::warning(
-                    DiagnosticKind::AsCast, fn_name,
+                    DiagnosticKind::AsCast,
+                    fn_name,
                     "`as` cast can silently truncate values; prefer `From`/`TryFrom`",
                 ));
                 self.overflow_in_expr(inner, fn_name, out);
@@ -292,16 +329,21 @@ impl Analyzer {
         match expr {
             // I/O macros are side effects
             Expr::Macro { name, .. }
-                if matches!(name.as_str(), "println" | "print" | "eprintln" | "eprint" | "write" | "writeln") =>
+                if matches!(
+                    name.as_str(),
+                    "println" | "print" | "eprintln" | "eprint" | "write" | "writeln"
+                ) =>
             {
                 out.push(Diagnostic::error(
-                    DiagnosticKind::PurityViolation, fn_name,
+                    DiagnosticKind::PurityViolation,
+                    fn_name,
                     format!("`#[pure]` function contains I/O macro `{}!()`", name),
                 ));
             }
             Expr::Unsafe(block) => {
                 out.push(Diagnostic::error(
-                    DiagnosticKind::UnsafeUsage, fn_name,
+                    DiagnosticKind::UnsafeUsage,
+                    fn_name,
                     "`#[pure]` function contains an `unsafe` block",
                 ));
                 self.purity_in_block(block, fn_name, out);
@@ -333,7 +375,8 @@ impl Analyzer {
                 let has_wild = arms.iter().any(|a| matches!(a.pat, Pat::Wild));
                 if has_wild {
                     out.push(Diagnostic::warning(
-                        DiagnosticKind::WildcardMatch, fn_name,
+                        DiagnosticKind::WildcardMatch,
+                        fn_name,
                         "wildcard `_` arm in `match` at --strict=4; \
                          consider exhaustively listing all variants",
                     ));
@@ -353,14 +396,12 @@ impl Analyzer {
         // unwrap / expect already caught by panic analysis above; escalate to errors
         let panic_diags = self.collect_panic_sites(&f.body, &f.name);
         for d in panic_diags {
-            match d.kind {
-                DiagnosticKind::PotentialPanic => {
-                    out.push(Diagnostic::error(
-                        DiagnosticKind::LlmGuardrail, &f.name,
-                        format!("--llm-mode: {}", d.message),
-                    ));
-                }
-                _ => {}
+            if d.kind == DiagnosticKind::PotentialPanic {
+                out.push(Diagnostic::error(
+                    DiagnosticKind::LlmGuardrail,
+                    &f.name,
+                    format!("--llm-mode: {}", d.message),
+                ));
             }
         }
         // as-casts are errors in LLM mode
@@ -373,11 +414,15 @@ impl Analyzer {
     }
 
     fn llm_cast_check(&self, block: &Block, fn_name: &str, out: &mut Vec<Diagnostic>) {
-        let stmts_exprs: Vec<&Expr> = block.stmts.iter().filter_map(|s| match s {
-            Stmt::Semi(e) | Stmt::Expr(e) => Some(e),
-            Stmt::Let { init: Some(e), .. } => Some(e),
-            _ => None,
-        }).collect();
+        let stmts_exprs: Vec<&Expr> = block
+            .stmts
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Semi(e) | Stmt::Expr(e) => Some(e),
+                Stmt::Let { init: Some(e), .. } => Some(e),
+                _ => None,
+            })
+            .collect();
         for expr in stmts_exprs {
             self.llm_cast_in_expr(expr, fn_name, out);
         }
@@ -389,7 +434,8 @@ impl Analyzer {
     fn llm_cast_in_expr(&self, expr: &Expr, fn_name: &str, out: &mut Vec<Diagnostic>) {
         if let Expr::Cast(..) = expr {
             out.push(Diagnostic::error(
-                DiagnosticKind::LlmGuardrail, fn_name,
+                DiagnosticKind::LlmGuardrail,
+                fn_name,
                 "--llm-mode: `as` cast is disallowed; use `From`/`TryFrom` for safe conversions",
             ));
         }
@@ -397,11 +443,15 @@ impl Analyzer {
     }
 
     fn llm_macro_check(&self, block: &Block, fn_name: &str, out: &mut Vec<Diagnostic>) {
-        let stmts_exprs: Vec<&Expr> = block.stmts.iter().filter_map(|s| match s {
-            Stmt::Semi(e) | Stmt::Expr(e) => Some(e),
-            Stmt::Let { init: Some(e), .. } => Some(e),
-            _ => None,
-        }).collect();
+        let stmts_exprs: Vec<&Expr> = block
+            .stmts
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Semi(e) | Stmt::Expr(e) => Some(e),
+                Stmt::Let { init: Some(e), .. } => Some(e),
+                _ => None,
+            })
+            .collect();
         for expr in stmts_exprs {
             self.llm_macro_in_expr(expr, fn_name, out);
         }
@@ -414,7 +464,8 @@ impl Analyzer {
         if let Expr::Macro { name, .. } = expr {
             if matches!(name.as_str(), "todo" | "unimplemented" | "unreachable") {
                 out.push(Diagnostic::error(
-                    DiagnosticKind::LlmGuardrail, fn_name,
+                    DiagnosticKind::LlmGuardrail,
+                    fn_name,
                     format!("--llm-mode: `{}!()` is disallowed in non-test code", name),
                 ));
             }
@@ -423,11 +474,15 @@ impl Analyzer {
     }
 
     fn llm_unsafe_check(&self, block: &Block, fn_name: &str, out: &mut Vec<Diagnostic>) {
-        let stmts_exprs: Vec<&Expr> = block.stmts.iter().filter_map(|s| match s {
-            Stmt::Semi(e) | Stmt::Expr(e) => Some(e),
-            Stmt::Let { init: Some(e), .. } => Some(e),
-            _ => None,
-        }).collect();
+        let stmts_exprs: Vec<&Expr> = block
+            .stmts
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Semi(e) | Stmt::Expr(e) => Some(e),
+                Stmt::Let { init: Some(e), .. } => Some(e),
+                _ => None,
+            })
+            .collect();
         for expr in stmts_exprs {
             self.llm_unsafe_in_expr(expr, fn_name, out);
         }
@@ -439,7 +494,8 @@ impl Analyzer {
     fn llm_unsafe_in_expr(&self, expr: &Expr, fn_name: &str, out: &mut Vec<Diagnostic>) {
         if let Expr::Unsafe(_) = expr {
             out.push(Diagnostic::error(
-                DiagnosticKind::LlmGuardrail, fn_name,
+                DiagnosticKind::LlmGuardrail,
+                fn_name,
                 "--llm-mode: `unsafe` blocks are disallowed",
             ));
         }
@@ -458,45 +514,71 @@ fn is_nonzero_literal(expr: &Expr) -> bool {
 /// This is a shallow walk; `f` is responsible for recursing further.
 fn recurse_expr<F: FnMut(&Expr)>(expr: &Expr, mut f: F) {
     match expr {
-        Expr::Unary(_, e) | Expr::Deref(e) | Expr::Try(e) | Expr::Await(e)
-            | Expr::Return(Some(e)) | Expr::Break(_, Some(e)) | Expr::Ref { expr: e, .. }
-            => f(e),
-        Expr::Binary(_, l, r) | Expr::Assign(l, r) | Expr::OpAssign(_, l, r)
-            | Expr::Index(l, r) => { f(l); f(r); }
-        Expr::Cast(e, _)     => f(e),
-        Expr::Field(e, _)    => f(e),
+        Expr::Unary(_, e)
+        | Expr::Deref(e)
+        | Expr::Try(e)
+        | Expr::Await(e)
+        | Expr::Return(Some(e))
+        | Expr::Break(_, Some(e))
+        | Expr::Ref { expr: e, .. } => f(e),
+        Expr::Binary(_, l, r)
+        | Expr::Assign(l, r)
+        | Expr::OpAssign(_, l, r)
+        | Expr::Index(l, r) => {
+            f(l);
+            f(r);
+        }
+        Expr::Cast(e, _) => f(e),
+        Expr::Field(e, _) => f(e),
         Expr::Call { func, args } => {
             f(func);
-            args.iter().for_each(|a| f(a));
+            args.iter().for_each(&mut f);
         }
         Expr::MethodCall { receiver, args, .. } => {
             f(receiver);
-            args.iter().for_each(|a| f(a));
+            args.iter().for_each(&mut f);
         }
-        Expr::If { cond, then_block, else_block } => {
+        Expr::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
             f(cond);
-            block_exprs(then_block).for_each(|e| f(e));
-            if let Some(eb) = else_block { f(eb); }
+            block_exprs(then_block).for_each(&mut f);
+            if let Some(eb) = else_block {
+                f(eb);
+            }
         }
         Expr::Match { scrutinee, arms } => {
             f(scrutinee);
             for arm in arms {
-                if let Some(g) = &arm.guard { f(g); }
+                if let Some(g) = &arm.guard {
+                    f(g);
+                }
                 f(&arm.body);
             }
         }
-        Expr::Block(b) | Expr::Unsafe(b) => block_exprs(b).for_each(|e| f(e)),
+        Expr::Block(b) | Expr::Unsafe(b) => block_exprs(b).for_each(&mut f),
         Expr::Closure { body, .. } => f(body),
         Expr::StructLit { fields, .. } => fields.iter().for_each(|(_, e)| f(e)),
-        Expr::Array(elems) | Expr::Tuple(elems) | Expr::Macro { args: elems, .. }
-            => elems.iter().for_each(|e| f(e)),
+        Expr::Array(elems) | Expr::Tuple(elems) | Expr::Macro { args: elems, .. } => {
+            elems.iter().for_each(&mut f)
+        }
         Expr::Range { start, end, .. } => {
-            if let Some(s) = start { f(s); }
-            if let Some(e) = end   { f(e); }
+            if let Some(s) = start {
+                f(s);
+            }
+            if let Some(e) = end {
+                f(e);
+            }
         }
         // Leaf nodes — no sub-expressions
-        Expr::Lit(_) | Expr::Ident(_) | Expr::Path(_)
-            | Expr::Continue(_) | Expr::Return(None) | Expr::Break(_, None) => {}
+        Expr::Lit(_)
+        | Expr::Ident(_)
+        | Expr::Path(_)
+        | Expr::Continue(_)
+        | Expr::Return(None)
+        | Expr::Break(_, None) => {}
     }
 }
 
@@ -532,9 +614,9 @@ mod tests {
         );
         let diagnostics = Analyzer::new(StrictnessLevel::Prove, false).analyze_program(&program);
 
-        assert!(diagnostics.iter().any(|d|
-            d.is_error() && d.kind == DiagnosticKind::UnsafeUsage
-        ));
+        assert!(diagnostics
+            .iter()
+            .any(|d| d.is_error() && d.kind == DiagnosticKind::UnsafeUsage));
     }
 
     #[test]
@@ -548,10 +630,8 @@ mod tests {
         );
         let diagnostics = Analyzer::new(StrictnessLevel::Explore, true).analyze_program(&program);
 
-        assert!(diagnostics.iter().any(|d|
-            d.is_error()
-                && d.kind == DiagnosticKind::LlmGuardrail
-                && d.message.contains("unsafe")
-        ));
+        assert!(diagnostics.iter().any(|d| d.is_error()
+            && d.kind == DiagnosticKind::LlmGuardrail
+            && d.message.contains("unsafe")));
     }
 }

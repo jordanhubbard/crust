@@ -18,8 +18,8 @@
 //!    arithmetic proofs, reporting which VCs are proved, unknown, or failing.
 
 use std::fmt;
-use std::process::{Command, Stdio};
 use std::io::Write;
+use std::process::{Command, Stdio};
 
 use crate::ast::*;
 
@@ -56,11 +56,11 @@ pub struct VerifCondition {
 impl VerifCondition {
     pub fn kind_str(&self) -> &'static str {
         match self.kind {
-            VcKind::Precondition   => "requires",
-            VcKind::Postcondition  => "ensures",
-            VcKind::Invariant      => "invariant",
-            VcKind::NoOverflow     => "no_overflow",
-            VcKind::NoPanic        => "no_panic",
+            VcKind::Precondition => "requires",
+            VcKind::Postcondition => "ensures",
+            VcKind::Invariant => "invariant",
+            VcKind::NoOverflow => "no_overflow",
+            VcKind::NoPanic => "no_panic",
         }
     }
 }
@@ -76,7 +76,14 @@ enum VcKind {
 
 impl fmt::Display for VerifCondition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}:{}] {} — {:?}", self.fn_name, self.kind_str(), self.expr, self.status)
+        write!(
+            f,
+            "[{}:{}] {} — {:?}",
+            self.fn_name,
+            self.kind_str(),
+            self.expr,
+            self.status
+        )
     }
 }
 
@@ -125,7 +132,11 @@ impl ContractChecker {
 
         for vc in vcs {
             if vc.smtlib.is_empty() {
-                results.push(format!("SKIP  [{}:{}] (no SMTLIB encoding)", vc.fn_name, vc.kind_str()));
+                results.push(format!(
+                    "SKIP  [{}:{}] (no SMTLIB encoding)",
+                    vc.fn_name,
+                    vc.kind_str()
+                ));
                 continue;
             }
             // Wrap in (assert (not ...)) to check satisfiability of the negation
@@ -135,14 +146,30 @@ impl ContractChecker {
                 smtlib_of_expr_str(&vc.expr),
             );
             match run_z3(&script) {
-                Some(output) if output.trim() == "unsat" =>
-                    results.push(format!("PROVED  [{}:{}] {}", vc.fn_name, vc.kind_str(), vc.expr)),
-                Some(output) if output.trim() == "sat" =>
-                    results.push(format!("DISPROVED [{}:{}] {} (counter-example found)", vc.fn_name, vc.kind_str(), vc.expr)),
-                Some(output) =>
-                    results.push(format!("UNKNOWN [{}:{}] {} (solver: {})", vc.fn_name, vc.kind_str(), vc.expr, output.trim())),
-                None =>
-                    results.push(format!("ERROR  [{}:{}] z3 invocation failed", vc.fn_name, vc.kind_str())),
+                Some(output) if output.trim() == "unsat" => results.push(format!(
+                    "PROVED  [{}:{}] {}",
+                    vc.fn_name,
+                    vc.kind_str(),
+                    vc.expr
+                )),
+                Some(output) if output.trim() == "sat" => results.push(format!(
+                    "DISPROVED [{}:{}] {} (counter-example found)",
+                    vc.fn_name,
+                    vc.kind_str(),
+                    vc.expr
+                )),
+                Some(output) => results.push(format!(
+                    "UNKNOWN [{}:{}] {} (solver: {})",
+                    vc.fn_name,
+                    vc.kind_str(),
+                    vc.expr,
+                    output.trim()
+                )),
+                None => results.push(format!(
+                    "ERROR  [{}:{}] z3 invocation failed",
+                    vc.fn_name,
+                    vc.kind_str()
+                )),
             }
         }
         results
@@ -158,30 +185,30 @@ fn extract_fn_vcs(f: &FnDef, vcs: &mut Vec<VerifCondition>) {
                 let expr_str = pretty_expr(e);
                 vcs.push(VerifCondition {
                     fn_name: f.name.clone(),
-                    kind:    VcKind::Precondition,
-                    smtlib:  smtlib_of_expr(e, &param_sorts(f)),
-                    expr:    expr_str,
-                    status:  VcStatus::Unchecked,
+                    kind: VcKind::Precondition,
+                    smtlib: smtlib_of_expr(e, &param_sorts(f)),
+                    expr: expr_str,
+                    status: VcStatus::Unchecked,
                 });
             }
             Attr::Ensures(e) => {
                 let expr_str = pretty_expr(e);
                 vcs.push(VerifCondition {
                     fn_name: f.name.clone(),
-                    kind:    VcKind::Postcondition,
-                    smtlib:  smtlib_of_expr(e, &param_sorts(f)),
-                    expr:    expr_str,
-                    status:  VcStatus::Unchecked,
+                    kind: VcKind::Postcondition,
+                    smtlib: smtlib_of_expr(e, &param_sorts(f)),
+                    expr: expr_str,
+                    status: VcStatus::Unchecked,
                 });
             }
             Attr::Invariant(e) => {
                 let expr_str = pretty_expr(e);
                 vcs.push(VerifCondition {
                     fn_name: f.name.clone(),
-                    kind:    VcKind::Invariant,
-                    smtlib:  smtlib_of_expr(e, &param_sorts(f)),
-                    expr:    expr_str,
-                    status:  VcStatus::Unchecked,
+                    kind: VcKind::Invariant,
+                    smtlib: smtlib_of_expr(e, &param_sorts(f)),
+                    expr: expr_str,
+                    status: VcStatus::Unchecked,
                 });
             }
             _ => {}
@@ -192,7 +219,8 @@ fn extract_fn_vcs(f: &FnDef, vcs: &mut Vec<VerifCondition>) {
 /// Build an SMTLIB2 `declare-const` preamble mapping each parameter to
 /// an Int sort (simplified — real types are more complex).
 fn param_sorts(f: &FnDef) -> String {
-    f.params.iter()
+    f.params
+        .iter()
         .filter(|p| !p.is_self)
         .map(|p| format!("(declare-const {} Int)", p.name))
         .collect::<Vec<_>>()
@@ -228,17 +256,23 @@ fn smtlib_expr(expr: &Expr) -> String {
         Expr::Ident(name) => name.clone(),
         Expr::Binary(op, l, r) => {
             let op_str = match op {
-                BinOp::Add => "+", BinOp::Sub => "-", BinOp::Mul => "*",
+                BinOp::Add => "+",
+                BinOp::Sub => "-",
+                BinOp::Mul => "*",
                 BinOp::Div => "div",
                 // Note: SMTLIB2 `mod` assumes non-negative divisors (like Euclidean modulo).
                 // Rust's `%` is truncated remainder (can be negative). For Prove mode,
                 // this approximation is acceptable for positive-domain proofs; add
                 // `rem` if you need exact signed-integer semantics.
                 BinOp::Rem => "mod",
-                BinOp::Eq  => "=",  BinOp::Ne  => "distinct",
-                BinOp::Lt  => "<",  BinOp::Le  => "<=",
-                BinOp::Gt  => ">",  BinOp::Ge  => ">=",
-                BinOp::And => "and", BinOp::Or  => "or",
+                BinOp::Eq => "=",
+                BinOp::Ne => "distinct",
+                BinOp::Lt => "<",
+                BinOp::Le => "<=",
+                BinOp::Gt => ">",
+                BinOp::Ge => ">=",
+                BinOp::And => "and",
+                BinOp::Or => "or",
                 _ => "?",
             };
             format!("({} {} {})", op_str, smtlib_expr(l), smtlib_expr(r))
@@ -252,31 +286,46 @@ fn smtlib_expr(expr: &Expr) -> String {
 /// Pretty-print an expression back to Rust syntax (simplified).
 fn pretty_expr(expr: &Expr) -> String {
     match expr {
-        Expr::Lit(Lit::Int(n))    => n.to_string(),
-        Expr::Lit(Lit::Bool(b))   => b.to_string(),
-        Expr::Lit(Lit::Str(s))    => format!("{:?}", s),
-        Expr::Ident(name)         => name.clone(),
-        Expr::Path(parts)         => parts.join("::"),
+        Expr::Lit(Lit::Int(n)) => n.to_string(),
+        Expr::Lit(Lit::Bool(b)) => b.to_string(),
+        Expr::Lit(Lit::Str(s)) => format!("{:?}", s),
+        Expr::Ident(name) => name.clone(),
+        Expr::Path(parts) => parts.join("::"),
         Expr::Binary(op, l, r) => {
             let op_str = match op {
-                BinOp::Add => "+", BinOp::Sub => "-", BinOp::Mul => "*",
-                BinOp::Div => "/", BinOp::Rem => "%",
-                BinOp::Eq  => "==", BinOp::Ne  => "!=",
-                BinOp::Lt  => "<",  BinOp::Le  => "<=",
-                BinOp::Gt  => ">",  BinOp::Ge  => ">=",
-                BinOp::And => "&&", BinOp::Or  => "||",
-                BinOp::BitAnd => "&", BinOp::BitOr => "|", BinOp::BitXor => "^",
-                BinOp::Shl => "<<", BinOp::Shr => ">>",
+                BinOp::Add => "+",
+                BinOp::Sub => "-",
+                BinOp::Mul => "*",
+                BinOp::Div => "/",
+                BinOp::Rem => "%",
+                BinOp::Eq => "==",
+                BinOp::Ne => "!=",
+                BinOp::Lt => "<",
+                BinOp::Le => "<=",
+                BinOp::Gt => ">",
+                BinOp::Ge => ">=",
+                BinOp::And => "&&",
+                BinOp::Or => "||",
+                BinOp::BitAnd => "&",
+                BinOp::BitOr => "|",
+                BinOp::BitXor => "^",
+                BinOp::Shl => "<<",
+                BinOp::Shr => ">>",
             };
             format!("({} {} {})", pretty_expr(l), op_str, pretty_expr(r))
         }
         Expr::Unary(UnOp::Neg, e) => format!("-({})", pretty_expr(e)),
         Expr::Unary(UnOp::Not, e) => format!("!({})", pretty_expr(e)),
-        Expr::MethodCall { receiver, method, args, .. } => {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
             let args_str = args.iter().map(pretty_expr).collect::<Vec<_>>().join(", ");
             format!("{}.{}({})", pretty_expr(receiver), method, args_str)
         }
-        Expr::Field(e, f)         => format!("{}.{}", pretty_expr(e), f),
+        Expr::Field(e, f) => format!("{}.{}", pretty_expr(e), f),
         _ => format!("{:?}", expr),
     }
 }
@@ -284,8 +333,8 @@ fn pretty_expr(expr: &Expr) -> String {
 /// Invoke z3 with a script on stdin, return stdout.
 fn run_z3(script: &str) -> Option<String> {
     let mut child = Command::new("z3")
-        .arg("-in")           // read from stdin
-        .arg("-smt2")         // SMTLIB2 input
+        .arg("-in") // read from stdin
+        .arg("-smt2") // SMTLIB2 input
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

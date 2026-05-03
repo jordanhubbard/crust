@@ -77,7 +77,8 @@ fn emit_coq_enum(e: &EnumDef) -> String {
                 }
             }
             VariantData::Struct(fields) => {
-                let args = fields.iter()
+                let args = fields
+                    .iter()
                     .map(|(_, t)| coq_ty(t))
                     .collect::<Vec<_>>()
                     .join(" -> ");
@@ -92,32 +93,58 @@ fn emit_coq_enum(e: &EnumDef) -> String {
 fn emit_coq_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
     let mut out = String::new();
 
-    let params_str = f.params.iter()
+    let params_str = f
+        .params
+        .iter()
         .filter(|p| !p.is_self)
         .map(|p| format!("({} : {})", p.name, coq_ty(&p.ty)))
         .collect::<Vec<_>>()
         .join(" ");
 
-    let ret_str = f.ret_ty.as_ref().map(|t| coq_ty(t)).unwrap_or_else(|| "unit".into());
+    let ret_str = f
+        .ret_ty
+        .as_ref()
+        .map(coq_ty)
+        .unwrap_or_else(|| "unit".into());
 
     // Extract requires / ensures for this function
-    let requires: Vec<String> = f.attrs.iter().filter_map(|a| {
-        if let Attr::Requires(e) = a { Some(pretty_coq_expr(e)) } else { None }
-    }).collect();
-    let ensures: Vec<String> = f.attrs.iter().filter_map(|a| {
-        if let Attr::Ensures(e) = a { Some(pretty_coq_expr(e)) } else { None }
-    }).collect();
+    let requires: Vec<String> = f
+        .attrs
+        .iter()
+        .filter_map(|a| {
+            if let Attr::Requires(e) = a {
+                Some(pretty_coq_expr(e))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let ensures: Vec<String> = f
+        .attrs
+        .iter()
+        .filter_map(|a| {
+            if let Attr::Ensures(e) = a {
+                Some(pretty_coq_expr(e))
+            } else {
+                None
+            }
+        })
+        .collect();
 
-    let fn_vcs: Vec<&VerifCondition> =
-        all_vcs.iter().filter(|v| v.fn_name == f.name).collect();
+    let fn_vcs: Vec<&VerifCondition> = all_vcs.iter().filter(|v| v.fn_name == f.name).collect();
 
     if requires.is_empty() && ensures.is_empty() && fn_vcs.is_empty() {
         // No contracts → emit a simple axiom placeholder
         out.push_str(&format!(
             "(* Specification for {} *)\n\
              Axiom {}_spec : forall{}, {}.\n",
-            f.name, f.name,
-            if params_str.is_empty() { String::new() } else { format!(" {}", params_str) },
+            f.name,
+            f.name,
+            if params_str.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", params_str)
+            },
             ret_str,
         ));
         return out;
@@ -141,8 +168,13 @@ fn emit_coq_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
         "(* Contract theorem for {} *)\n\
          Theorem {}_contract{} :\n  {} ->\n  let result := (* body *) tt in\n  {}.\n\
          Proof.\n  admit. (* TODO: fill in proof *)\nQed.\n",
-        f.name, f.name,
-        if params_str.is_empty() { String::new() } else { format!(" {}", params_str) },
+        f.name,
+        f.name,
+        if params_str.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", params_str)
+        },
         pre,
         post,
     ));
@@ -152,9 +184,17 @@ fn emit_coq_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
         out.push_str(&format!(
             "(* VC #{}: [{}] {} *)\n\
              Lemma {}_{}_vc_{}{} : {}.\nProof. admit. Qed.\n",
-            i + 1, vc.kind_str(), vc.expr,
-            f.name, vc.kind_str(), i + 1,
-            if params_str.is_empty() { String::new() } else { format!(" {}", params_str) },
+            i + 1,
+            vc.kind_str(),
+            vc.expr,
+            f.name,
+            vc.kind_str(),
+            i + 1,
+            if params_str.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", params_str)
+            },
             vc.expr,
         ));
     }
@@ -165,23 +205,33 @@ fn emit_coq_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
 fn coq_ty(ty: &Ty) -> String {
     match ty {
         Ty::Named(s) => match s.as_str() {
-            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" |
-            "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => "Z".into(),
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
+            | "u128" | "usize" => "Z".into(),
             "f32" | "f64" => "R".into(),
-            "bool"   => "bool".into(),
+            "bool" => "bool".into(),
             "String" | "str" => "string".into(),
-            other    => other.to_string(),
+            other => other.to_string(),
         },
         Ty::Unit | Ty::Never => "unit".into(),
         Ty::Ref(_, inner) | Ty::Ptr(_, inner) => coq_ty(inner),
-        Ty::Slice(inner)  => format!("list {}", coq_ty(inner)),
+        Ty::Slice(inner) => format!("list {}", coq_ty(inner)),
         Ty::Tuple(tys) => {
-            if tys.is_empty() { "unit".into() }
-            else { format!("({})", tys.iter().map(coq_ty).collect::<Vec<_>>().join(" * ")) }
+            if tys.is_empty() {
+                "unit".into()
+            } else {
+                format!(
+                    "({})",
+                    tys.iter().map(coq_ty).collect::<Vec<_>>().join(" * ")
+                )
+            }
         }
         Ty::Generic(name, args) => {
             let args_str = args.iter().map(coq_ty).collect::<Vec<_>>().join(" ");
-            if args_str.is_empty() { name.clone() } else { format!("({} {})", name, args_str) }
+            if args_str.is_empty() {
+                name.clone()
+            } else {
+                format!("({} {})", name, args_str)
+            }
         }
         Ty::Lifetime(_) => "unit".into(), // lifetimes have no Coq representation
     }
@@ -189,24 +239,31 @@ fn coq_ty(ty: &Ty) -> String {
 
 fn pretty_coq_expr(expr: &Expr) -> String {
     match expr {
-        Expr::Lit(Lit::Int(n))  => n.to_string(),
+        Expr::Lit(Lit::Int(n)) => n.to_string(),
         Expr::Lit(Lit::Bool(b)) => b.to_string(),
-        Expr::Ident(name)       => name.clone(),
+        Expr::Ident(name) => name.clone(),
         Expr::Binary(op, l, r) => {
             let op_str = match op {
-                BinOp::Add => "+", BinOp::Sub => "-", BinOp::Mul => "*",
-                BinOp::Div => "/", BinOp::Rem => "mod",
-                BinOp::Eq  => "=",  BinOp::Ne  => "<>",
-                BinOp::Lt  => "<",  BinOp::Le  => "<=",
-                BinOp::Gt  => ">",  BinOp::Ge  => ">=",
-                BinOp::And => "/\\", BinOp::Or  => "\\/",
+                BinOp::Add => "+",
+                BinOp::Sub => "-",
+                BinOp::Mul => "*",
+                BinOp::Div => "/",
+                BinOp::Rem => "mod",
+                BinOp::Eq => "=",
+                BinOp::Ne => "<>",
+                BinOp::Lt => "<",
+                BinOp::Le => "<=",
+                BinOp::Gt => ">",
+                BinOp::Ge => ">=",
+                BinOp::And => "/\\",
+                BinOp::Or => "\\/",
                 _ => "?",
             };
             format!("({} {} {})", pretty_coq_expr(l), op_str, pretty_coq_expr(r))
         }
         Expr::Unary(UnOp::Neg, e) => format!("(-{})", pretty_coq_expr(e)),
         Expr::Unary(UnOp::Not, e) => format!("(~ {})", pretty_coq_expr(e)),
-        _ => format!("(*unsupported*) True"),
+        _ => "(*unsupported*) True".to_string(),
     }
 }
 
@@ -262,7 +319,8 @@ fn emit_lean_enum(e: &EnumDef) -> String {
         match &v.data {
             VariantData::Unit => out.push_str(&format!("  | {}\n", v.name)),
             VariantData::Tuple(tys) => {
-                let args = tys.iter()
+                let args = tys
+                    .iter()
                     .enumerate()
                     .map(|(i, t)| format!("(field{} : {})", i, lean_ty(t)))
                     .collect::<Vec<_>>()
@@ -270,7 +328,8 @@ fn emit_lean_enum(e: &EnumDef) -> String {
                 out.push_str(&format!("  | {} {}: {}\n", v.name, args, e.name));
             }
             VariantData::Struct(fields) => {
-                let args = fields.iter()
+                let args = fields
+                    .iter()
                     .map(|(n, t)| format!("({} : {})", n, lean_ty(t)))
                     .collect::<Vec<_>>()
                     .join(" ");
@@ -284,41 +343,81 @@ fn emit_lean_enum(e: &EnumDef) -> String {
 fn emit_lean_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
     let mut out = String::new();
 
-    let params_str = f.params.iter()
+    let params_str = f
+        .params
+        .iter()
         .filter(|p| !p.is_self)
         .map(|p| format!("({} : {})", p.name, lean_ty(&p.ty)))
         .collect::<Vec<_>>()
         .join(" ");
 
-    let ret_str = f.ret_ty.as_ref().map(|t| lean_ty(t)).unwrap_or_else(|| "Unit".into());
+    let ret_str = f
+        .ret_ty
+        .as_ref()
+        .map(lean_ty)
+        .unwrap_or_else(|| "Unit".into());
 
-    let requires: Vec<String> = f.attrs.iter().filter_map(|a| {
-        if let Attr::Requires(e) = a { Some(pretty_lean_expr(e)) } else { None }
-    }).collect();
-    let ensures: Vec<String> = f.attrs.iter().filter_map(|a| {
-        if let Attr::Ensures(e) = a { Some(pretty_lean_expr(e)) } else { None }
-    }).collect();
+    let requires: Vec<String> = f
+        .attrs
+        .iter()
+        .filter_map(|a| {
+            if let Attr::Requires(e) = a {
+                Some(pretty_lean_expr(e))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let ensures: Vec<String> = f
+        .attrs
+        .iter()
+        .filter_map(|a| {
+            if let Attr::Ensures(e) = a {
+                Some(pretty_lean_expr(e))
+            } else {
+                None
+            }
+        })
+        .collect();
 
-    let fn_vcs: Vec<&VerifCondition> =
-        all_vcs.iter().filter(|v| v.fn_name == f.name).collect();
+    let fn_vcs: Vec<&VerifCondition> = all_vcs.iter().filter(|v| v.fn_name == f.name).collect();
 
-    let pre = if requires.is_empty() { "True".into() } else { requires.join(" ∧ ") };
-    let post = if ensures.is_empty() { "True".into() } else { ensures.join(" ∧ ") };
+    let pre = if requires.is_empty() {
+        "True".into()
+    } else {
+        requires.join(" ∧ ")
+    };
+    let post = if ensures.is_empty() {
+        "True".into()
+    } else {
+        ensures.join(" ∧ ")
+    };
 
     if !requires.is_empty() || !ensures.is_empty() {
         out.push_str(&format!(
             "-- Contract theorem for {}\n\
              theorem {}_contract {}: {} → {} := by\n  sorry\n",
-            f.name, f.name,
-            if params_str.is_empty() { String::new() } else { format!(" {}", params_str) },
-            pre, post,
+            f.name,
+            f.name,
+            if params_str.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", params_str)
+            },
+            pre,
+            post,
         ));
     } else {
         out.push_str(&format!(
             "-- Specification for {}\n\
              opaque {}_spec {}: {} := by sorry\n",
-            f.name, f.name,
-            if params_str.is_empty() { String::new() } else { format!(" {}", params_str) },
+            f.name,
+            f.name,
+            if params_str.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", params_str)
+            },
             ret_str,
         ));
     }
@@ -328,9 +427,17 @@ fn emit_lean_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
         out.push_str(&format!(
             "-- VC #{}: [{}] {}\n\
              theorem {}_{}_vc_{} {}: {} := by\n  sorry\n",
-            i + 1, vc.kind_str(), vc.expr,
-            f.name, vc.kind_str(), i + 1,
-            if params_str.is_empty() { String::new() } else { format!(" {}", params_str) },
+            i + 1,
+            vc.kind_str(),
+            vc.expr,
+            f.name,
+            vc.kind_str(),
+            i + 1,
+            if params_str.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", params_str)
+            },
             vc.expr,
         ));
     }
@@ -344,20 +451,30 @@ fn lean_ty(ty: &Ty) -> String {
             "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => "Int".into(),
             "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => "Nat".into(),
             "f32" | "f64" => "Float".into(),
-            "bool"   => "Bool".into(),
+            "bool" => "Bool".into(),
             "String" | "str" | "&str" => "String".into(),
-            other    => other.to_string(),
+            other => other.to_string(),
         },
         Ty::Unit | Ty::Never => "Unit".into(),
         Ty::Ref(_, inner) | Ty::Ptr(_, inner) => lean_ty(inner),
-        Ty::Slice(inner)  => format!("Array {}", lean_ty(inner)),
+        Ty::Slice(inner) => format!("Array {}", lean_ty(inner)),
         Ty::Tuple(tys) => {
-            if tys.is_empty() { "Unit".into() }
-            else { format!("({})", tys.iter().map(lean_ty).collect::<Vec<_>>().join(" × ")) }
+            if tys.is_empty() {
+                "Unit".into()
+            } else {
+                format!(
+                    "({})",
+                    tys.iter().map(lean_ty).collect::<Vec<_>>().join(" × ")
+                )
+            }
         }
         Ty::Generic(name, args) => {
             let args_str = args.iter().map(lean_ty).collect::<Vec<_>>().join(" ");
-            if args_str.is_empty() { name.clone() } else { format!("({} {})", name, args_str) }
+            if args_str.is_empty() {
+                name.clone()
+            } else {
+                format!("({} {})", name, args_str)
+            }
         }
         Ty::Lifetime(_) => "Unit".into(),
     }
@@ -365,20 +482,38 @@ fn lean_ty(ty: &Ty) -> String {
 
 fn pretty_lean_expr(expr: &Expr) -> String {
     match expr {
-        Expr::Lit(Lit::Int(n))  => n.to_string(),
-        Expr::Lit(Lit::Bool(b)) => if *b { "True".into() } else { "False".into() },
-        Expr::Ident(name)       => name.clone(),
+        Expr::Lit(Lit::Int(n)) => n.to_string(),
+        Expr::Lit(Lit::Bool(b)) => {
+            if *b {
+                "True".into()
+            } else {
+                "False".into()
+            }
+        }
+        Expr::Ident(name) => name.clone(),
         Expr::Binary(op, l, r) => {
             let op_str = match op {
-                BinOp::Add => "+", BinOp::Sub => "-", BinOp::Mul => "*",
-                BinOp::Div => "/", BinOp::Rem => "%",
-                BinOp::Eq  => "=",  BinOp::Ne  => "≠",
-                BinOp::Lt  => "<",  BinOp::Le  => "≤",
-                BinOp::Gt  => ">",  BinOp::Ge  => "≥",
-                BinOp::And => "∧", BinOp::Or  => "∨",
+                BinOp::Add => "+",
+                BinOp::Sub => "-",
+                BinOp::Mul => "*",
+                BinOp::Div => "/",
+                BinOp::Rem => "%",
+                BinOp::Eq => "=",
+                BinOp::Ne => "≠",
+                BinOp::Lt => "<",
+                BinOp::Le => "≤",
+                BinOp::Gt => ">",
+                BinOp::Ge => "≥",
+                BinOp::And => "∧",
+                BinOp::Or => "∨",
                 _ => "?",
             };
-            format!("({} {} {})", pretty_lean_expr(l), op_str, pretty_lean_expr(r))
+            format!(
+                "({} {} {})",
+                pretty_lean_expr(l),
+                op_str,
+                pretty_lean_expr(r)
+            )
         }
         Expr::Unary(UnOp::Neg, e) => format!("(-{})", pretty_lean_expr(e)),
         Expr::Unary(UnOp::Not, e) => format!("(¬ {})", pretty_lean_expr(e)),
