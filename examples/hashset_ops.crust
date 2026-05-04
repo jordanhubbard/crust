@@ -1,0 +1,20 @@
+// HashSet basic ops: insert, contains, len. Note: post-remove `contains`
+// queries return stale results today (see crust-aiy); this example
+// exercises only the verified surface.
+
+use std::collections::HashSet;
+
+fn main() {
+    let mut a: HashSet<i64> = HashSet::new();
+    a.insert(1);
+    a.insert(2);
+    a.insert(3);
+    a.insert(2); // duplicate, ignored
+
+    println!("len = {}", a.len());
+    println!("has 2 = {}", a.contains(&2));
+    println!("has 99 = {}", a.contains(&99));
+
+    a.remove(&2);
+    println!("after remove(2), len = {}", a.len());
+}

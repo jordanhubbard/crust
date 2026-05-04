@@ -1,0 +1,32 @@
+// Simple turnstile state machine demonstrating enum-driven control flow.
+
+#[derive(Clone, Debug)]
+enum State { Locked, Unlocked }
+
+#[derive(Clone, Debug)]
+enum Event { Coin, Push }
+
+fn step(state: State, event: Event) -> State {
+    match (state, event) {
+        (State::Locked, Event::Coin)   => State::Unlocked,
+        (State::Locked, Event::Push)   => State::Locked,
+        (State::Unlocked, Event::Coin) => State::Unlocked,
+        (State::Unlocked, Event::Push) => State::Locked,
+    }
+}
+
+fn name(s: State) -> &'static str {
+    match s {
+        State::Locked   => "locked",
+        State::Unlocked => "unlocked",
+    }
+}
+
+fn main() {
+    let events = vec![Event::Push, Event::Coin, Event::Coin, Event::Push, Event::Push];
+    let mut state = State::Locked;
+    for e in events {
+        state = step(state, e);
+        println!("now: {}", name(state.clone()));
+    }
+}

@@ -1,0 +1,17 @@
+// BTreeMap: insert, get, iterate (Crust treats it as HashMap-backed at Level 0).
+
+use std::collections::BTreeMap;
+
+fn main() {
+    let mut tally: BTreeMap<String, i64> = BTreeMap::new();
+    let words = vec!["apple", "banana", "apple", "cherry", "banana", "apple"];
+
+    for w in words {
+        *tally.entry(w.to_string()).or_insert(0) += 1;
+    }
+
+    println!("apple  = {}", tally["apple"]);
+    println!("banana = {}", tally["banana"]);
+    println!("cherry = {}", tally["cherry"]);
+    println!("total entries = {}", tally.len());
+}

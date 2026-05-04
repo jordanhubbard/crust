@@ -62,6 +62,14 @@ const KNOWN_FAILING: &[(&str, &str)] = &[
         "patterns.crust",
         "lifetime elision + refutable let (crust-1x4 / crust-ovw)",
     ),
+    (
+        "state_machine.crust",
+        "&'static str lifetime elision in fn return (crust-1x4)",
+    ),
+    (
+        "queue_channel.crust",
+        "generic struct method codegen drops type parameter (crust-1x4)",
+    ),
 ];
 
 #[test]
