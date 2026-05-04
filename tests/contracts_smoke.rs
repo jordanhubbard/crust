@@ -144,6 +144,92 @@ fn verify_json_escapes_control_chars() {
 }
 
 #[test]
+fn smt_disproves_postcondition_with_counter_example() {
+    ensure_built();
+    // z3 must be on PATH for this test to be meaningful; if not, just skip.
+    let z3_present = Command::new("z3")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !z3_present {
+        eprintln!("z3 not on PATH — skipping");
+        return;
+    }
+    // `result > x` cannot be proved without body interpretation, so the
+    // SMT layer should report DISPROVED with a concrete counter-example
+    // showing both x and result. crust-7e8.
+    let src = write_temp(
+        "smt_disprove",
+        "#[requires(x > 0)]\n#[ensures(result > x)]\nfn id(x: i64) -> i64 { x }\nfn main() {}\n",
+    );
+    let out = workspace_root().join("target").join("__crust_smt_test_out");
+    let output = Command::new(crust_binary())
+        .arg("build")
+        .arg(&src)
+        .arg("--strict=4")
+        .arg("--verify")
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .expect("crust");
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_file(&src);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("DISPROVED") && stderr.contains("ensures"),
+        "expected DISPROVED ensures with z3 model, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("counter-example: x=") && stderr.contains("result="),
+        "expected concrete counter-example pairs (x=N, result=M), got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn smt_typed_sorts_handle_bool_and_real() {
+    ensure_built();
+    let z3_present = Command::new("z3")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !z3_present {
+        return;
+    }
+    // Bool parameter — must be declared as Bool sort, not Int. crust-7e8.
+    let src = write_temp(
+        "smt_bool",
+        "#[requires(flag)]\nfn run(flag: bool) -> i64 { 0 }\nfn main() {}\n",
+    );
+    let out = workspace_root().join("target").join("__crust_smt_bool_out");
+    let output = Command::new(crust_binary())
+        .arg("build")
+        .arg(&src)
+        .arg("--strict=4")
+        .arg("--verify")
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .expect("crust");
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_file(&src);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Bool requires `(assert flag)` ; satisfiable when flag = true → CONSISTENT.
+    assert!(
+        stderr.contains("CONSISTENT") && stderr.contains("requires"),
+        "expected CONSISTENT requires for bool param, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
 fn verify_emit_proof_skipped_on_error() {
     ensure_built();
     // Program with an --llm-mode error; proof skeletons should NOT be written

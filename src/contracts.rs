@@ -49,6 +49,9 @@ pub struct VerifCondition {
     pub expr: String,
     /// SMTLIB2 encoding of the VC (used for z3/cvc5).
     smtlib: String,
+    /// SMT sort name for the function's return type (`Int`, `Real`, `Bool`,
+    /// or `Int` fallback). Used to declare `result` in postcondition scripts.
+    return_sort: &'static str,
     /// Result after optional solver invocation.
     pub status: VcStatus,
 }
@@ -178,9 +181,11 @@ impl ContractChecker {
                         )
                     }
                     VcKind::Postcondition => {
-                        // Declare `result` as a free Int (best-effort sort).
-                        // Negate Q and conjoin with preconditions; unsat means
-                        // no precondition-satisfying model violates Q.
+                        // Declare `result` with the function's actual return
+                        // sort (Int/Real/Bool — crust-7e8). Negate Q and
+                        // conjoin with preconditions; unsat means no
+                        // precondition-satisfying model violates Q. When sat,
+                        // `(get-model)` reports a counter-example.
                         let pre_conj = if pre_clauses.is_empty() {
                             "true".to_string()
                         } else if pre_clauses.len() == 1 {
@@ -190,11 +195,13 @@ impl ContractChecker {
                         };
                         (
                             format!(
-                                "{}\n(declare-const result Int)\n\
+                                "(set-option :produce-models true)\n\
+                                 {}\n(declare-const result {})\n\
                                  (assert {})\n\
                                  (assert (not {}))\n\
-                                 (check-sat)\n",
-                                preamble, pre_conj, body_smt
+                                 (check-sat)\n\
+                                 (get-model)\n",
+                                preamble, vc.return_sort, pre_conj, body_smt
                             ),
                             true,
                         )
@@ -212,23 +219,34 @@ impl ContractChecker {
                 let label = vc.kind_str();
                 match run_z3(&script) {
                     Some(output) => {
-                        let r = output.trim();
-                        if r == "unsat" {
+                        let trimmed = output.trim();
+                        // First line is `sat` / `unsat` / `unknown`; if
+                        // produce-models was on and the verdict is `sat`,
+                        // the rest of the output is the counter-example.
+                        let mut iter = trimmed.lines();
+                        let verdict = iter.next().unwrap_or("").trim();
+                        let model_text = iter.collect::<Vec<_>>().join("\n");
+                        if verdict == "unsat" {
                             if prove_on_unsat {
                                 results
                                     .push(format!("PROVED  [{}:{}] {}", fn_name, label, vc.expr));
                             } else {
-                                // For sat-checks, unsat means contradictory.
                                 results.push(format!(
                                     "INCONSISTENT [{}:{}] {} (no model satisfies it)",
                                     fn_name, label, vc.expr
                                 ));
                             }
-                        } else if r == "sat" {
+                        } else if verdict == "sat" {
                             if prove_on_unsat {
+                                let cex = extract_counterexample(&model_text);
+                                let suffix = if cex.is_empty() {
+                                    String::from(" (counter-example found)")
+                                } else {
+                                    format!(" (counter-example: {})", cex)
+                                };
                                 results.push(format!(
-                                    "DISPROVED [{}:{}] {} (counter-example found)",
-                                    fn_name, label, vc.expr
+                                    "DISPROVED [{}:{}] {}{}",
+                                    fn_name, label, vc.expr, suffix
                                 ));
                             } else {
                                 results.push(format!(
@@ -239,7 +257,7 @@ impl ContractChecker {
                         } else {
                             results.push(format!(
                                 "UNKNOWN [{}:{}] {} (solver: {})",
-                                fn_name, label, vc.expr, r
+                                fn_name, label, vc.expr, verdict
                             ));
                         }
                     }
@@ -257,52 +275,97 @@ impl ContractChecker {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 fn extract_fn_vcs(f: &FnDef, vcs: &mut Vec<VerifCondition>) {
+    let preamble = param_sorts(f);
+    let ret = return_sort(f);
     for attr in &f.attrs {
-        match attr {
-            Attr::Requires(e) => {
-                let expr_str = pretty_expr(e);
-                vcs.push(VerifCondition {
-                    fn_name: f.name.clone(),
-                    kind: VcKind::Precondition,
-                    smtlib: smtlib_of_expr(e, &param_sorts(f)),
-                    expr: expr_str,
-                    status: VcStatus::Unchecked,
-                });
-            }
-            Attr::Ensures(e) => {
-                let expr_str = pretty_expr(e);
-                vcs.push(VerifCondition {
-                    fn_name: f.name.clone(),
-                    kind: VcKind::Postcondition,
-                    smtlib: smtlib_of_expr(e, &param_sorts(f)),
-                    expr: expr_str,
-                    status: VcStatus::Unchecked,
-                });
-            }
-            Attr::Invariant(e) => {
-                let expr_str = pretty_expr(e);
-                vcs.push(VerifCondition {
-                    fn_name: f.name.clone(),
-                    kind: VcKind::Invariant,
-                    smtlib: smtlib_of_expr(e, &param_sorts(f)),
-                    expr: expr_str,
-                    status: VcStatus::Unchecked,
-                });
-            }
-            _ => {}
-        }
+        let (expr, kind) = match attr {
+            Attr::Requires(e) => (e, VcKind::Precondition),
+            Attr::Ensures(e) => (e, VcKind::Postcondition),
+            Attr::Invariant(e) => (e, VcKind::Invariant),
+            _ => continue,
+        };
+        vcs.push(VerifCondition {
+            fn_name: f.name.clone(),
+            kind,
+            smtlib: smtlib_of_expr(expr, &preamble),
+            expr: pretty_expr(expr),
+            return_sort: ret,
+            status: VcStatus::Unchecked,
+        });
     }
 }
 
 /// Build an SMTLIB2 `declare-const` preamble mapping each parameter to
-/// an Int sort (simplified — real types are more complex).
+/// the SMT sort that best matches its Rust type.
+///
+/// - Integer types (`i8..i128`, `u8..u128`, `isize`, `usize`) → `Int`
+/// - Float types (`f32`, `f64`) → `Real`
+/// - `bool` → `Bool`
+/// - Other / unknown → `Int` as a fallback, with a comment noting the
+///   approximation. crust-7e8 will close this further as the verification
+///   pipeline grows.
 fn param_sorts(f: &FnDef) -> String {
-    f.params
-        .iter()
-        .filter(|p| !p.is_self)
-        .map(|p| format!("(declare-const {} Int)", p.name))
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut lines: Vec<String> = Vec::new();
+    for p in f.params.iter().filter(|p| !p.is_self) {
+        let sort = smt_sort_of_ty(&p.ty);
+        if sort.fallback_note {
+            lines.push(format!(
+                "; fallback Int for parameter `{}: {:?}`",
+                p.name, p.ty
+            ));
+        }
+        lines.push(format!("(declare-const {} {})", p.name, sort.name));
+    }
+    lines.join("\n")
+}
+
+/// SMT sort for a Rust type, with a flag telling the caller this is a
+/// fallback rather than a faithful encoding.
+struct SmtSort {
+    name: &'static str,
+    fallback_note: bool,
+}
+
+fn smt_sort_of_ty(ty: &Ty) -> SmtSort {
+    match ty {
+        Ty::Named(n) => match n.as_str() {
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
+            | "u128" | "usize" => SmtSort {
+                name: "Int",
+                fallback_note: false,
+            },
+            "f32" | "f64" => SmtSort {
+                name: "Real",
+                fallback_note: false,
+            },
+            "bool" => SmtSort {
+                name: "Bool",
+                fallback_note: false,
+            },
+            _ => SmtSort {
+                name: "Int",
+                fallback_note: true,
+            },
+        },
+        Ty::Unit => SmtSort {
+            name: "Int",
+            fallback_note: true,
+        },
+        Ty::Ref(_, inner) | Ty::Ptr(_, inner) | Ty::Slice(inner) => smt_sort_of_ty(inner),
+        _ => SmtSort {
+            name: "Int",
+            fallback_note: true,
+        },
+    }
+}
+
+/// SMT sort name for the function's return type. Used when declaring
+/// `result` for postcondition VCs.
+fn return_sort(f: &FnDef) -> &'static str {
+    match &f.ret_ty {
+        Some(t) => smt_sort_of_ty(t).name,
+        None => "Int",
+    }
 }
 
 /// Translate an AST expression to an SMTLIB2 s-expression (best-effort).
@@ -413,6 +476,80 @@ fn pretty_expr(expr: &Expr) -> String {
         Expr::Field(e, f) => format!("{}.{}", pretty_expr(e), f),
         _ => format!("{:?}", expr),
     }
+}
+
+/// Parse z3's `(get-model)` output into a `name=value, name=value` summary.
+///
+/// z3's pretty-printer splits each `(define-fun NAME () SORT VALUE)` across
+/// multiple lines, so we squash whitespace first to get one logical S-expr,
+/// then walk the token stream looking for `define-fun` forms.
+fn extract_counterexample(model_text: &str) -> String {
+    // Tokenise: insert spaces around parens so they're standalone, then
+    // collapse whitespace.
+    let spaced: String = model_text
+        .chars()
+        .flat_map(|c| match c {
+            '(' => vec![' ', '(', ' '],
+            ')' => vec![' ', ')', ' '],
+            other => vec![other],
+        })
+        .collect();
+    let toks: Vec<&str> = spaced.split_whitespace().collect();
+    let mut pairs: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        if toks[i] == "define-fun" && i + 5 < toks.len() {
+            // Expected layout: define-fun NAME ( ) SORT VALUE_TOKEN_OR_(_-_VAL_)
+            let name = toks[i + 1];
+            // toks[i+2] should be `(`, toks[i+3] should be `)`, toks[i+4] is SORT.
+            // VALUE starts at toks[i+5] and may be a single token (`5`, `true`,
+            // `1/2`) or a parenthesised form like `( - 5 )`.
+            let value = if toks[i + 5] == "(" {
+                // walk to matching `)`, joining tokens in between.
+                let mut depth = 1usize;
+                let mut j = i + 6;
+                let mut parts: Vec<&str> = Vec::new();
+                while j < toks.len() && depth > 0 {
+                    match toks[j] {
+                        "(" => {
+                            depth += 1;
+                            parts.push("(");
+                        }
+                        ")" => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            parts.push(")");
+                        }
+                        t => parts.push(t),
+                    }
+                    j += 1;
+                }
+                let inner = parts.join(" ");
+                // Common shape: `- 5` → `-5`, `/ 1 2` → `1/2`.
+                if let Some(rest) = inner.strip_prefix("- ") {
+                    format!("-{}", rest.trim())
+                } else if let Some(rest) = inner.strip_prefix("/ ") {
+                    let mut split = rest.splitn(2, ' ');
+                    let a = split.next().unwrap_or("");
+                    let b = split.next().unwrap_or("");
+                    format!("{}/{}", a.trim(), b.trim())
+                } else {
+                    inner
+                }
+            } else {
+                toks[i + 5].to_string()
+            };
+            if !name.starts_with('!') && !name.contains("::") && !value.is_empty() {
+                pairs.push(format!("{}={}", name, value));
+            }
+            i += 6;
+        } else {
+            i += 1;
+        }
+    }
+    pairs.join(", ")
 }
 
 /// Invoke z3 with a script on stdin, return stdout.
