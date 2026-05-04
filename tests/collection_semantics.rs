@@ -111,12 +111,11 @@ fn btreemap_iterates_sorted_by_key() {
 }
 
 #[test]
-fn btreeset_currently_iterates_in_insertion_order() {
+fn btreeset_iterates_sorted() {
     ensure_built();
-    // DIVERGENT from rustc: real BTreeSet iterates sorted. Crust backs it
-    // with Vec and so iterates in insertion order. Tracked as crust-4ri.
-    // This test pins the current behaviour so the eventual fix shows up
-    // as an unexpected pass that prompts removing this test.
+    // crust-4ri (closed): BTreeSet now backs to Value::SortedSet which
+    // maintains the sorted invariant on insert and iterates in ascending
+    // order — matching rustc.
     let out = run_capture(
         "btreeset_order",
         "use std::collections::BTreeSet;\n\
@@ -126,9 +125,40 @@ fn btreeset_currently_iterates_in_insertion_order() {
              for v in &s { println!(\"{}\", v); }\n\
          }",
     );
-    // When crust-4ri lands and BTreeSet iterates sorted, this assertion
-    // will fail — that's a feature.
-    assert_eq!(out, vec!["50", "10", "30"]);
+    assert_eq!(out, vec!["10", "30", "50"]);
+}
+
+#[test]
+fn btreeset_dedups_on_insert() {
+    ensure_built();
+    let out = run_capture(
+        "btreeset_dedup",
+        "use std::collections::BTreeSet;\n\
+         fn main() {\n\
+             let mut s: BTreeSet<i64> = BTreeSet::new();\n\
+             s.insert(1); s.insert(2); s.insert(1); s.insert(2); s.insert(3);\n\
+             println!(\"{}\", s.len());\n\
+         }",
+    );
+    assert_eq!(out, vec!["3"]);
+}
+
+#[test]
+fn btreeset_remove_clears_membership() {
+    ensure_built();
+    let out = run_capture(
+        "btreeset_remove",
+        "use std::collections::BTreeSet;\n\
+         fn main() {\n\
+             let mut s: BTreeSet<i64> = BTreeSet::new();\n\
+             s.insert(1); s.insert(2); s.insert(3);\n\
+             s.remove(&2);\n\
+             println!(\"len={}\", s.len());\n\
+             println!(\"has2={}\", s.contains(&2));\n\
+             println!(\"has1={}\", s.contains(&1));\n\
+         }",
+    );
+    assert_eq!(out, vec!["len=2", "has2=false", "has1=true"]);
 }
 
 #[test]

@@ -41,6 +41,11 @@ pub enum Value {
         map_name: String,
         key: String,
     },
+    /// Sorted, deduped collection — backs `BTreeSet`. Invariant: items sorted
+    /// in ascending order with no duplicates. Iteration honours this order,
+    /// matching rustc's `BTreeSet` semantics where Crust's Vec-backed
+    /// `HashSet` would emit insertion order. crust-4ri.
+    SortedSet(Vec<Value>),
 }
 
 impl fmt::Display for Value {
@@ -132,6 +137,16 @@ impl fmt::Display for Value {
             Value::Result_(Ok(v)) => write!(f, "Ok({})", v),
             Value::Result_(Err(e)) => write!(f, "Err({})", e),
             Value::EntryRef { .. } => write!(f, "<entry-ref>"),
+            Value::SortedSet(v) => {
+                write!(f, "{{")?;
+                for (i, x) in v.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", x)?;
+                }
+                write!(f, "}}")
+            }
         }
     }
 }
@@ -155,6 +170,7 @@ impl Value {
             Value::Option_(_) => "Option",
             Value::Result_(_) => "Result",
             Value::EntryRef { .. } => "EntryRef",
+            Value::SortedSet(_) => "BTreeSet",
         }
     }
 
@@ -175,6 +191,10 @@ impl Value {
             Value::Vec(v) => {
                 let items: Vec<String> = v.iter().map(|x| x.debug_repr()).collect();
                 format!("[{}]", items.join(", "))
+            }
+            Value::SortedSet(v) => {
+                let items: Vec<String> = v.iter().map(|x| x.debug_repr()).collect();
+                format!("{{{}}}", items.join(", "))
             }
             Value::Tuple(v) => {
                 let items: Vec<String> = v.iter().map(|x| x.debug_repr()).collect();

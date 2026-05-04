@@ -32,6 +32,38 @@ pub fn call_method_mut(
     interp: &mut Interpreter,
 ) -> Option<(R, Value)> {
     match (recv, method) {
+        // ── BTreeSet mutating ops (crust-4ri) ────────────────────────────
+        // Maintain sorted, deduped invariant on insert/remove. Comparisons
+        // use the same value-comparison helper the rest of stdlib uses.
+        (Value::SortedSet(mut v), "insert") => {
+            let val = args.into_iter().next().unwrap_or(Value::Unit);
+            match v.binary_search_by(|x| {
+                crate::eval::compare_values(x, &val).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                Ok(_) => Some((Ok(Value::Bool(false)), Value::SortedSet(v))),
+                Err(pos) => {
+                    v.insert(pos, val);
+                    Some((Ok(Value::Bool(true)), Value::SortedSet(v)))
+                }
+            }
+        }
+        (Value::SortedSet(mut v), "remove" | "remove_value") => {
+            let target = args.into_iter().next().unwrap_or(Value::Unit);
+            match v.binary_search_by(|x| {
+                crate::eval::compare_values(x, &target).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                Ok(pos) => {
+                    v.remove(pos);
+                    Some((Ok(Value::Bool(true)), Value::SortedSet(v)))
+                }
+                Err(_) => Some((Ok(Value::Bool(false)), Value::SortedSet(v))),
+            }
+        }
+        (Value::SortedSet(mut v), "clear") => {
+            v.clear();
+            Some((Ok(Value::Unit), Value::SortedSet(v)))
+        }
+
         // Vec mutating methods (push_back/pop_front are VecDeque aliases at Level 0)
         (Value::Vec(mut v), "push" | "push_back") => {
             let val = args.into_iter().next().unwrap_or(Value::Unit);
@@ -462,9 +494,11 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
         }
 
         // Vec / VecDeque / HashSet constructors (all backed by Vec at Level 0)
-        "Vec::new" | "VecDeque::new" | "HashSet::new" | "BTreeSet::new" => {
-            Some(Ok(Value::Vec(Vec::new())))
-        }
+        "Vec::new" | "VecDeque::new" | "HashSet::new" => Some(Ok(Value::Vec(Vec::new()))),
+        // BTreeSet uses its own variant so iteration honours sorted order
+        // (crust-4ri). Most ops fall through to Vec arms via the
+        // SortedSet-specific arms below.
+        "BTreeSet::new" => Some(Ok(Value::SortedSet(Vec::new()))),
         "Vec::with_capacity" | "VecDeque::with_capacity" | "HashSet::with_capacity" => {
             Some(Ok(Value::Vec(Vec::new())))
         }
@@ -698,6 +732,37 @@ pub fn call_method(
     let recv = self_val?;
 
     match (&recv, method) {
+        // ── BTreeSet methods (crust-4ri) ──────────────────────────────────────
+        // Most fall through to Vec-equivalent ops by extracting the inner
+        // sorted Vec; iter/clone return a Vec copy so the rest of the
+        // iterator chain works against existing Vec arms.
+        (Value::SortedSet(v), "len") => Some(Ok(Value::Int(v.len() as i64))),
+        (Value::SortedSet(v), "is_empty") => Some(Ok(Value::Bool(v.is_empty()))),
+        (Value::SortedSet(v), "contains") => {
+            let target = args.into_iter().next().unwrap_or(Value::Unit);
+            let found = v
+                .binary_search_by(|x| {
+                    crate::eval::compare_values(x, &target).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .is_ok();
+            Some(Ok(Value::Bool(found)))
+        }
+        (Value::SortedSet(v), "first") => {
+            Some(Ok(Value::Option_(v.first().cloned().map(Box::new))))
+        }
+        (Value::SortedSet(v), "last") => Some(Ok(Value::Option_(v.last().cloned().map(Box::new)))),
+        (Value::SortedSet(_), "iter" | "into_iter") => {
+            // Convert to Vec so chained iterator ops dispatch through
+            // existing Vec arms. The Vec is already sorted.
+            if let Value::SortedSet(v) = recv {
+                Some(Ok(Value::Vec(v)))
+            } else {
+                None
+            }
+        }
+        (Value::SortedSet(_), "clone") => Some(Ok(recv.clone())),
+        (Value::SortedSet(v), "to_vec") => Some(Ok(Value::Vec(v.clone()))),
+
         // ── Vec methods ───────────────────────────────────────────────────────
         (Value::Vec(_), "len") => {
             if let Value::Vec(v) = recv {

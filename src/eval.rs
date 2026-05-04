@@ -1980,6 +1980,9 @@ impl Interpreter {
 
         let items: Vec<Value> = match iterable {
             Value::Vec(v) => v,
+            // BTreeSet iterates in sorted order — its backing Vec already
+            // maintains the invariant (crust-4ri).
+            Value::SortedSet(v) => v,
             Value::Range(start, end, inclusive) => {
                 let end = if inclusive { end + 1 } else { end };
                 (start..end).map(Value::Int).collect()

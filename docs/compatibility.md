@@ -87,7 +87,7 @@ the following ways to remain teaching-friendly at Level 0:
 5. **All integers are `i64` in the interpreter.** Cast operations (`x as u32`) happen at codegen but are no-ops in `crust run`. Width-specific methods (`wrapping_*`, `checked_*`, `saturating_*`, `overflowing_*`, `leading_zeros`, `count_ones`, …) trigger an unsupported-feature warning at Develop+ since their interpreter results don't match rustc. `u128::MAX` / `i128::MAX` are clamped to `i64` boundaries because they don't fit Crust's value type. Stdlib constants `u8/u16/u32/u64::MAX`, `i8/i16/i32::MAX`, `usize/isize::MAX/MIN`, `f32/f64::MAX/MIN` are all defined; `u64::MAX` and `u128::MAX` are approximations (`crust-6yj`).
 6. **HashMap iteration is sorted by key, not random.** Stdlib `std::collections::HashMap` randomises iteration order; Crust sorts by key for deterministic test output. `BTreeMap` iteration also lands in sorted order (matches rustc) by virtue of the same backing. Programs that rely on a specific HashMap iteration order are non-portable to rustc — don't write them.
 
-7. **`BTreeSet` iterates in insertion order, not sorted order.** This *is* a divergence from rustc and is tracked by `crust-4ri`. Use `BTreeMap` (which iterates sorted) until that bead lands, or sort the result yourself.
+7. **`BTreeSet` and `BTreeMap` iterate in sorted order**, matching rustc. `BTreeSet` is backed by a separate `Value::SortedSet` variant that maintains the sorted-and-deduped invariant on insert; `BTreeMap` inherits the sort from the HashMap-backed iteration logic.
 
 8. **`VecDeque::push_front` is O(n)** because Crust backs the deque with a `Vec`. The visible semantics match rustc; only the asymptotic cost differs.
 
