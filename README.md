@@ -220,7 +220,10 @@ These are tracked in the beads issue database (run `bd ready` to see priorities)
 - `crust-7e8` / `crust-v8b` — `--strict=4` SMT discharge is consistency-only without a body interpreter; emitted Coq/Lean files are uninterpreted-axiom skeletons.
 - `crust-o3a` — Levels 1–3 are mostly diagnostics-shaped; the strictness dial does not yet engage rustc's borrow checker or clippy.
 
-See [DESIGN.md](DESIGN.md) for the full technical architecture and roadmap.
+See [DESIGN.md](DESIGN.md) for the technical architecture and
+[docs/compatibility.md](docs/compatibility.md) for the authoritative Rust
+compatibility contract — the supported subset, intentional divergences from
+rustc, and unsupported features tracked against beads.
 
 ---
 
