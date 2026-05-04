@@ -163,6 +163,10 @@ fn build_cmd(args: &[String]) {
         }
     };
     if let Err(e) = build_file_with_opts(&opts) {
+        // Summary errors (Analysis / TypeCheck / Rustc) carry counts whose
+        // underlying diagnostics have already been streamed to stderr.
+        // Print the summary line as a one-line tail so the exit code has
+        // human-readable context without duplicating diagnostic bodies.
         eprintln!("error: {}", e);
         std::process::exit(1);
     }
@@ -191,10 +195,10 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
     let is_hard_failure =
         opts.level >= StrictnessLevel::Prove || (opts.llm_mode && error_count > 0);
     if is_hard_failure && error_count > 0 {
-        return Err(CrustError::runtime(format!(
-            "{} analysis error(s); fix them or relax --strict / drop --llm-mode",
-            error_count
-        )));
+        return Err(CrustError::Analysis {
+            count: error_count,
+            hint: "fix them or relax --strict / drop --llm-mode",
+        });
     }
 
     // ── Type inference pass ───────────────────────────────────────────────────
@@ -204,7 +208,9 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
             eprintln!("type: [{}] {}", d.function, d.message);
         }
         if opts.level >= StrictnessLevel::Prove && !type_diags.is_empty() {
-            return Err(CrustError::runtime("type errors at --strict=4"));
+            return Err(CrustError::TypeCheck {
+                count: type_diags.len(),
+            });
         }
     }
 
@@ -214,10 +220,10 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
         eprintln!("type: [{}] {}", d.function, d.message);
     }
     if !param_diags.is_empty() {
-        return Err(CrustError::runtime(format!(
-            "{} parameter-annotation error(s) at --strict=4 --llm-mode",
-            param_diags.len()
-        )));
+        return Err(CrustError::Analysis {
+            count: param_diags.len(),
+            hint: "parameter-annotation errors at --strict=4 --llm-mode",
+        });
     }
 
     // ── Codegen ───────────────────────────────────────────────────────────────
@@ -301,7 +307,7 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
         eprintln!("      Binary: {}", Path::new(&opts.output).display());
         Ok(())
     } else {
-        Err(CrustError::runtime("rustc compilation failed"))
+        Err(CrustError::Rustc)
     }
 }
 
