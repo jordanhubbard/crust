@@ -75,19 +75,18 @@ Every one of those top 10 errors has a reasonable default that a beginner doesn'
 
 | Error | Crust Level 0 behaviour | Status |
 |-------|-------------------------|--------|
-| E0277 — Missing trait impl | Auto-derive `Clone`, `Debug`, `PartialEq` on user types; merge with author-supplied derives | Implemented |
-| E0382 — Use after move | Implicit clone on identifier-shaped argument and field positions | Partial — see [bd](#known-gaps) `crust-ovw` |
-| E0308 — Type mismatch | Safe numeric coercion in the interpreter | Partial — codegen does not always preserve widths (`crust-6yj`) |
-| E0282 — Can't infer type | Turbofish round-trips, integer literal defaulting | Implemented |
-| E0599 — Method not found | Auto-resolve common stdlib methods | Partial — no fuzzy match yet (`crust-k15`) |
-| E0432 — Unresolved import | Auto-import std prelude paths | **Not implemented** (`crust-k15`) |
-| E0425 — Unresolved name | Fuzzy match + suggest | **Not implemented** (`crust-k15`) |
-| E0106 — Missing lifetime | Elide aggressively | **Not implemented** (`crust-1x4`, `crust-ovw`) |
+| E0277 — Missing trait impl | Auto-derive `Clone`, `Debug`, `PartialEq` on user types; merge with author-supplied derives; auto-`T: Clone` bound on generics | Implemented |
+| E0382 — Use after move | `.iter().cloned()` on iterator chains plus per-closure `*p` strip-down based on the std iter signature | Implemented |
+| E0308 — Type mismatch | Safe numeric coercion in the interpreter; integer literal defaulting | Implemented (interpreter); codegen preserves width annotations |
+| E0282 — Can't infer type | Turbofish (`::<T1, T2>`) round-trips end-to-end through codegen | Implemented |
+| E0599 — Method not found | Auto-resolve common stdlib methods | Partial — no fuzzy match yet |
+| E0432 — Unresolved import | Auto-import std prelude paths | **Not implemented** — non-std imports trigger a `--extern`/cargo note |
+| E0425 — Unresolved name | Fuzzy match + suggest | **Not implemented** |
+| E0106 — Missing lifetime | Capture explicit `'lt` annotations; bare `&T` returns with no input refs auto-promote to `&'static T` | Implemented |
+| E0004 — Non-exhaustive match | `if let` lowering always emits a wildcard arm | Implemented |
+| E0005 — Refutable pattern in let | Auto-inject `else { unreachable!() }` at Level <Ship | Implemented |
 
-The code is still Rust. The generated binary is still produced by `rustc`. The
-developer doesn't get punched in the face on day one — but the strictness dial
-is still under active development; see [Current Status](#current-status) and
-the open beads issues for what's done vs in flight.
+The code is still Rust. The generated binary is still produced by `rustc`. As of v0.2, **all 13 bundled example programs build via `crust build` and produce stdout byte-identical to `crust run`** — closed-loop tested. The remaining open beads are research-grade items (interpreter reference model, proof-mode body interpreter); see [Current Status](#current-status).
 
 ### The Strictness Dial
 
@@ -105,11 +104,25 @@ Level 3: Ship       — full rustc parity, cargo clippy clean, zero-cost abstrac
                       "This IS rustc"
 ```
 
-> **Current state:** Levels 0 and 4 are partly wired (Level 0 codegen + Level 4
-> contract / SMT scaffolding). Levels 1, 2, 3 still mostly affect diagnostics
-> rather than enforcement — tracked in `crust-o3a`. The "Level 3 ↔ rustc parity"
-> claim is aspirational pending full ownership-relaxation analysis (`crust-ovw`)
-> and a real compatibility contract (`crust-u5k`).
+> **Current state:**
+> - **Level 0 (Explore)** — codegen end-to-end working; 13/13 examples build and
+>   match `crust run` stdout byte-for-byte.
+> - **Level 1 (Develop)** — adds shadow detection, panic-site warnings,
+>   arithmetic-overflow warnings, unsupported-feature warnings (impl Trait,
+>   explicit lifetimes, async fn at Prove, unknown macros, concurrency
+>   primitives, width-sensitive integer methods).
+> - **Level 2 (Harden)** — same warnings as Develop today. Borrow-checker
+>   activation specifically remains a follow-on.
+> - **Level 3 (Ship)** — drops auto-derives and the `.iter().cloned()` shim;
+>   swaps `rustc` for `clippy-driver` with `-Dwarnings`, so any clippy lint is
+>   a hard build error.
+> - **Level 4 (Prove)** — extracts `#[requires]`/`#[ensures]` contracts,
+>   discharges via z3 with typed sorts (Int/Real/Bool) and counter-example
+>   reporting, lowers bare arithmetic to `checked_*().expect(...)`. Body-tied
+>   verification (real symbolic execution) is tracked in `crust-v8b`.
+>
+> See [docs/compatibility.md](docs/compatibility.md) for the authoritative
+> contract.
 
 ---
 
@@ -169,10 +182,34 @@ make install                    # builds release and installs into /usr/local/bi
 crust run hello.crust           # interpret + run
 crust build hello.crust -o app  # compile a self-contained .crust file via rustc
 crust build --emit-rs lib.crust # also write the generated .rs alongside
+crust verify foo.crust --strict=4 --emit-proof   # JSON report + Coq/Lean
+crust repl                      # interactive REPL with rustyline
 ```
 
-`crust` accepts a single `.crust` file with `std`-only imports today. Cargo
-project / external-crate support is tracked in `crust-ti9`.
+`crust` accepts a single `.crust` file. Programs that import std are first-class.
+For programs that need other crates, pass precompiled rlibs via `--extern` and
+`-L`:
+
+```bash
+crust build app.crust \
+  --extern serde=/path/to/libserde-HASH.rlib \
+  -L /path/to/deps \
+  -o app
+```
+
+A sibling `Cargo.toml` is detected and a one-line note suggests the cargo
+workflow when (and only when) the program actually imports a non-std crate.
+Full cargo workspace integration is the only real `crust-ti9` follow-on.
+
+### Strictness flags
+
+```bash
+crust build foo.crust --strict=0   # default: implicit clones, auto-derive
+crust build foo.crust --strict=1   # adds shadow detection + warnings
+crust build foo.crust --strict=3   # invokes clippy-driver -Dwarnings
+crust build foo.crust --strict=4   # contract extraction, checked arithmetic
+crust build foo.crust --llm-mode   # bans unsafe, unwrap, todo!, as casts
+```
 
 ## Development
 
@@ -183,42 +220,36 @@ for the TDD and coverage policy.
 
 ## Current Status
 
-**v0.2.0** — Level 0 interpreter is broadly working; codegen is partial.
+**v0.2.0** — Level 0 codegen end-to-end working; verification surface scaffolded.
 
-The Level 0 **interpreter** (`crust run`) covers most of Rust's expression
-language for self-contained programs. The Level 0 **code generator**
-(`crust build`) compiles a useful subset to native binaries via `rustc` —
-small examples round-trip cleanly, but anything that relies on real ownership
-analysis (`.iter()` reference semantics, lifetime elision, refutable patterns
-in `let`) does not yet emit valid Rust. See the open beads tracker for the
-authoritative list.
+- **186 tests pass** (136 unit + 50 integration), `cargo fmt --check` clean,
+  `cargo clippy -D warnings` clean.
+- **All 13 bundled examples** build via `crust build` and produce stdout
+  byte-identical to `crust run` (verified by the differential-parity test).
+- **Coverage**: regions 52.70%, lines 55.08%, functions 74.63%. CI ratchet at 50%.
 
-Implemented in the interpreter:
+Implemented:
 
-- **All primitive types**: `i8`–`i64`, `u8`–`u64`, `f32`/`f64`, `bool`, `char`, `str`/`String`
-- **Collections**: `Vec`, `HashMap`, `HashSet`, `BTreeMap`, `VecDeque` (all backed by Vec/HashMap at Level 0)
-- **Traits**: definition, implementation, default methods, `dyn Trait`, `impl Trait`, operator overloading (`Add`, `Mul`, `Neg`, etc.)
-- **Closures**: capturing, `move`, `FnMut`, returning closures, higher-order functions
-- **Pattern matching**: destructuring, guards, or-patterns, slice patterns `[a, b, ..]`, range patterns, `@` bindings
-- **Error handling**: `Result`/`Option` with `?` operator, combinators (`map`, `and_then`, `unwrap_or`, etc.)
-- **Iterators**: `map`, `filter`, `fold`, `flat_map`, `zip`, `enumerate`, `chain`, `scan`, `partition`, `unzip`, custom `Iterator` impls
-- **Control flow**: `for`, `while`, `loop`, labeled breaks, `while let`, `if let`, `let-else`
-- **Generics**: generic functions and structs (type-erased at Level 0)
-- **String formatting**: width, alignment, fill, precision, hex/bin/oct, named args
-- **Associated constants** (`impl Type { const FOO: T = v; }`)
-- **Array repeat syntax** (`[val; N]`)
+- **All primitive types**: `i8`–`i128`, `u8`–`u128`, `isize`, `usize`, `f32`/`f64`, `bool`, `char`, `str`/`String`. Width-sensitive methods (`wrapping_*`, `checked_*`, `saturating_*`, `overflowing_*`, `leading_zeros`, …) emit a Develop+ warning since the interpreter collapses to `i64`.
+- **Collections**: `Vec`, `HashMap`, `HashSet`, `BTreeMap`, `VecDeque` (all backed by `Vec`/`HashMap`; `HashMap`/`BTreeMap` iterate sorted; `BTreeSet` insertion-ordered today, tracked).
+- **Traits**: definition, implementation, default methods, `dyn Trait`, operator overloading (`Add`, `Mul`, `Neg`, etc.). `impl Trait` accepted with a Develop+ warning since the parser collapses bounds.
+- **Closures**: capturing, `move`, `FnMut`, returning closures, higher-order functions. Iterator-chain closures get per-method `*p` strip-down so user code with explicit derefs round-trips through codegen.
+- **Pattern matching**: destructuring, guards, or-patterns, slice patterns `[a, b, ..]`, range patterns, `@` bindings. Refutable patterns in `let` auto-inject `else { unreachable!() }` at Level <Ship.
+- **Error handling**: `Result`/`Option` with `?` operator, combinators.
+- **Iterators**: `map`, `filter`, `fold`, `flat_map`, `zip`, `enumerate`, `chain`, `scan`, `partition`, `unzip`, custom `Iterator` impls.
+- **Control flow**: `for`, `while`, `loop`, labeled breaks, `while let`, `if let`, `let-else`.
+- **Generics**: type-erased at the interpreter; codegen captures and re-emits `<T, U>` parameter lists with auto `T: Clone` bound at Level <Ship. Explicit lifetimes round-trip; bare-`&T` returns auto-promote to `&'static T`.
+- **Modules**: inline `mod NAME { items }` (file-based `mod foo;` rejected with a clear diagnostic).
+- **Macros**: `println!`, `print!`, `eprintln!`, `eprint!`, `format!`, `vec!`, `panic!`, `assert!`, `assert_eq!`, `assert_ne!`, `dbg!`, `write!`, `writeln!`, `todo!`, `unimplemented!`, `unreachable!`. Other macros pass through to `rustc` with a Develop+ warning.
+- **Verification (`--strict=4`)**: extracts `#[requires]`/`#[ensures]`/`#[invariant]`, discharges via z3 with typed sorts, declares `result` with the function's actual return sort, reports counter-examples by parsing z3 `(get-model)` output. Lowers bare `+`/`-`/`*` to `checked_*().expect(…)` at codegen.
+- **Proof skeletons**: `--emit-proof` writes `.v` (Coq) and `.lean` (Lean 4) files where each function is an uninterpreted `Parameter`/`axiom` and the contract is a theorem with `admit`/`sorry`. The skeletons load into `coqc` and parse in Lean.
+- **`--llm-mode`**: hard-fails on `unsafe`, `unwrap`, `expect`, `as` casts, `todo!`/`unimplemented!`/`unreachable!`. At `--strict=4`, also requires explicit type annotations on every parameter and explicit return types.
 
-### Known gaps
+### Open work (beads)
 
-These are tracked in the beads issue database (run `bd ready` to see priorities):
-
-- `crust-ovw` — Level 0 ownership-relaxation analysis is not implemented; `.iter()`/closure capture/move-after-clone scenarios fail to round-trip through `crust build`.
-- `crust-1x4` — parser uses `skip_generics` / `skip_where` for many constructs; modules (`mod foo {}`), const generics, and where-clauses are not modelled.
-- `crust-rvq` / `crust-ti9` — no module system, no Cargo.toml integration; `crust` accepts a single file with std-only imports.
-- `crust-570` — `std::sync`, `std::thread`, `Arc`, `Mutex`, `mpsc::channel` are unimplemented.
-- `crust-6yj` — primitive integer types collapse to `i64` in the interpreter; widths/signedness are not preserved.
-- `crust-7e8` / `crust-v8b` — `--strict=4` SMT discharge is consistency-only without a body interpreter; emitted Coq/Lean files are uninterpreted-axiom skeletons.
-- `crust-o3a` — Levels 1–3 are mostly diagnostics-shaped; the strictness dial does not yet engage rustc's borrow checker or clippy.
+- `crust-0ku` (P1) — interpreter reference / aliasing / mutation model. Today `&x` is identity, `Rc`/`Arc`/`Cell`/`RefCell` are transparent. A real model would track borrow scopes.
+- `crust-v8b` (P2) — proof-mode body interpreter. Today the SMT layer treats functions as uninterpreted; real soundness requires symbolic execution of the body.
+- `crust-4ri` (P3, deferred) — `BTreeSet` sorted iteration. Needs a Value-variant rework.
 
 See [DESIGN.md](DESIGN.md) for the technical architecture and
 [docs/compatibility.md](docs/compatibility.md) for the authoritative Rust
@@ -243,4 +274,4 @@ MIT
 
 ## Authors
 
-Natasha Fatale · Rocky J. Squirrel · t peps
+The Crust Authors
