@@ -35,6 +35,11 @@ pub enum DiagnosticKind {
     WildcardMatch,
     UnsafeUsage,
     AsCast,
+    /// Rust feature that Crust accepts at parse time but cannot fully model.
+    /// Examples: `impl Trait` collapsed to a single named type, explicit
+    /// lifetimes, user-defined macros without a hardcoded lowering, async
+    /// blocks. Reported as warning at Develop+, error at Prove.
+    UnsupportedFeature,
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +121,22 @@ impl Analyzer {
     fn analyze_fn(&self, f: &FnDef) -> Vec<Diagnostic> {
         let mut diags = Vec::new();
 
+        // Unsupported-feature diagnostics at every level (warning), escalated
+        // to errors at Prove. This is a guard against silent semantic drift —
+        // crust-dfi.
+        if self.level >= StrictnessLevel::Develop {
+            let mut unsupported = Vec::new();
+            self.collect_unsupported(f, &mut unsupported);
+            if self.level >= StrictnessLevel::Prove {
+                diags.extend(unsupported.into_iter().map(|mut d| {
+                    d.error = true;
+                    d
+                }));
+            } else {
+                diags.extend(unsupported);
+            }
+        }
+
         // Panic-freedom at Level ≥ Develop
         if self.level >= StrictnessLevel::Develop {
             let panic_sites = self.collect_panic_sites(&f.body, &f.name);
@@ -159,6 +180,96 @@ impl Analyzer {
         }
 
         diags
+    }
+
+    // ── Unsupported-feature detection ─────────────────────────────────────────
+
+    /// Collect diagnostics for Rust features that Crust accepts syntactically
+    /// but cannot fully model. These are silent semantic-drift hazards if
+    /// users assume "Crust runs Rust" without knowing the gaps.
+    fn collect_unsupported(&self, f: &FnDef, out: &mut Vec<Diagnostic>) {
+        // 1. impl Trait — parser collapses to Ty::Named("impl") with no bounds.
+        for p in &f.params {
+            if is_impl_trait(&p.ty) {
+                out.push(Diagnostic::warning(
+                    DiagnosticKind::UnsupportedFeature,
+                    &f.name,
+                    format!(
+                        "parameter `{}: impl Trait` — bounds are not modelled by the interpreter; \
+                         Crust accepts it but does no trait-bound resolution",
+                        p.name
+                    ),
+                ));
+            }
+            if let Some(name) = lifetime_name(&p.ty) {
+                out.push(Diagnostic::warning(
+                    DiagnosticKind::UnsupportedFeature,
+                    &f.name,
+                    format!(
+                        "explicit lifetime `'{}` on parameter `{}` is not modelled; \
+                         Crust elides all lifetimes in the interpreter and inserts `'_` in codegen",
+                        name, p.name
+                    ),
+                ));
+            }
+        }
+        if let Some(ret) = &f.ret_ty {
+            if is_impl_trait(ret) {
+                out.push(Diagnostic::warning(
+                    DiagnosticKind::UnsupportedFeature,
+                    &f.name,
+                    "`impl Trait` return type — bounds are not modelled by the interpreter \
+                     (the codegen passes the type through to rustc, which will check it)",
+                ));
+            }
+        }
+
+        // 2. async fn at Level 4 — Crust evaluates async synchronously and has
+        //    no Future runtime; honest at Prove level requires explicit error.
+        if f.is_async && self.level >= StrictnessLevel::Prove {
+            out.push(Diagnostic::warning(
+                DiagnosticKind::UnsupportedFeature,
+                &f.name,
+                "`async fn` at --strict=4 is not yet supported (no Future runtime modelled); \
+                 see crust-7ra",
+            ));
+        }
+
+        // 3. Unknown macros — anything outside Crust's hardcoded recognition
+        //    set runs as a no-op at `crust run` and is passed through verbatim
+        //    to rustc, which may or may not have the macro available.
+        self.collect_unknown_macros(&f.body, &f.name, out);
+    }
+
+    fn collect_unknown_macros(&self, block: &Block, fn_name: &str, out: &mut Vec<Diagnostic>) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Semi(e) | Stmt::Expr(e) => self.macro_in_expr(e, fn_name, out),
+                Stmt::Let { init: Some(e), .. } => self.macro_in_expr(e, fn_name, out),
+                _ => {}
+            }
+        }
+        if let Some(tail) = &block.tail {
+            self.macro_in_expr(tail, fn_name, out);
+        }
+    }
+
+    fn macro_in_expr(&self, expr: &Expr, fn_name: &str, out: &mut Vec<Diagnostic>) {
+        if let Expr::Macro { name, .. } = expr {
+            if !is_known_macro(name) {
+                out.push(Diagnostic::warning(
+                    DiagnosticKind::UnsupportedFeature,
+                    fn_name,
+                    format!(
+                        "macro `{}!(...)` is not interpreted by Crust; \
+                         `crust run` will fail at this site, and `crust build` \
+                         will pass it through to rustc verbatim",
+                        name
+                    ),
+                ));
+            }
+        }
+        recurse_expr(expr, |e| self.macro_in_expr(e, fn_name, out));
     }
 
     // ── Panic sites ───────────────────────────────────────────────────────────
@@ -514,6 +625,57 @@ impl Analyzer {
 /// Returns true if `expr` is a literal that is provably non-zero.
 fn is_nonzero_literal(expr: &Expr) -> bool {
     matches!(expr, Expr::Lit(Lit::Int(n)) if *n != 0)
+}
+
+/// Whether a `Ty` was parsed from an `impl Trait` form. The parser collapses
+/// these to `Ty::Named("impl")` after consuming the trait list, so we can't
+/// recover the bounds — which is exactly the diagnostic point.
+fn is_impl_trait(ty: &Ty) -> bool {
+    match ty {
+        Ty::Named(s) => s == "impl",
+        Ty::Ref(_, inner) | Ty::Ptr(_, inner) | Ty::Slice(inner) => is_impl_trait(inner),
+        _ => false,
+    }
+}
+
+/// If the type carries an explicit lifetime annotation (not `'_`), return its
+/// name; otherwise None. Crust's interpreter elides all lifetimes, so an
+/// explicit one is informational at best.
+fn lifetime_name(ty: &Ty) -> Option<&str> {
+    match ty {
+        Ty::Lifetime(name) if name != "_" => Some(name),
+        Ty::Ref(_, inner) | Ty::Ptr(_, inner) | Ty::Slice(inner) => lifetime_name(inner),
+        _ => None,
+    }
+}
+
+/// Macros that Crust's `crust run` interpreter handles directly. Anything
+/// outside this set will fail at `crust run` time with "unknown macro" and is
+/// passed verbatim to rustc by codegen — fine if it's a real Rust stdlib
+/// macro, surprising if the user expected Crust to evaluate it. Keep in sync
+/// with `Interpreter::eval_macro` in eval.rs.
+fn is_known_macro(name: &str) -> bool {
+    matches!(
+        name,
+        "println"
+            | "print"
+            | "eprintln"
+            | "eprint"
+            | "format"
+            | "vec"
+            | "panic"
+            | "assert"
+            | "assert_eq"
+            | "assert_ne"
+            | "todo"
+            | "unimplemented"
+            | "unreachable"
+            | "dbg"
+            | "write"
+            | "writeln"
+    ) || name.starts_with("__for__")
+        || name.starts_with("__vec_repeat__")
+        || name == "__array_repeat__"
 }
 
 /// Walk the direct sub-expressions of `expr`, calling `f` on each.
