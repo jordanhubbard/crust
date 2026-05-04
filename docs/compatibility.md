@@ -19,9 +19,9 @@ superset of the previous level.
 | Level | Name    | Status today                                                      |
 |-------|---------|-------------------------------------------------------------------|
 | 0     | Explore | Default. Auto-derive `Clone, Debug, PartialEq` on user types; implicit `.clone()` injection on identifier-shaped argument and field positions; auto-deref for `.iter()` (compile output uses `iter().cloned()`). No analysis warnings. |
-| 1     | Develop | Adds: panic-site warnings (`unwrap`, `expect`, `[idx]`, division-by-zero, `panic!`), arithmetic-overflow warnings, unsupported-feature warnings (impl Trait, explicit lifetimes, unknown macros, concurrency imports), and structural type-mismatch warnings. |
-| 2     | Harden  | Same warnings as Develop today. Borrow-checker activation at this level is tracked in `crust-o3a`. |
-| 3     | Ship    | Same diagnostics. Auto-derives are dropped — the developer controls the derive list, and codegen drops Crust's `iter().cloned()` shim. Full rustc parity beyond this is `crust-o3a`. |
+| 1     | Develop | Adds: panic-site warnings (`unwrap`, `expect`, `[idx]`, division-by-zero, `panic!`), arithmetic-overflow warnings, unsupported-feature warnings (impl Trait, explicit lifetimes, unknown macros, concurrency imports), structural type-mismatch warnings, and shadow-detection warnings (`let x = …; let x = …` in the same scope). |
+| 2     | Harden  | Same warnings as Develop. Borrow-checker activation specifically remains a follow-on. |
+| 3     | Ship    | Same diagnostics. Auto-derives are dropped, force-`pub` inside modules is off, and the `.iter().cloned()` shim is dropped. Build invokes `clippy-driver` (rustc-compatible CLI that adds clippy lints) with `-Dwarnings`, so any clippy warning is a hard build error. If `clippy-driver` isn't on PATH, falls back to plain rustc with a one-line warning. |
 | 4     | Prove   | Every Develop+ warning becomes a hard error. Codegen lowers bare `+`, `-`, `*` to `checked_*().expect("arithmetic overflow")`. `#[requires]` / `#[ensures]` are extracted; SMT discharge runs against z3 if `--verify` is passed. Wildcard `_` match arms become errors. |
 
 `--llm-mode` is an orthogonal flag that adds: ban `unsafe`, ban `unwrap`/`expect`, ban `as` casts, ban `todo!`/`unimplemented!`/`unreachable!`. These are hard errors regardless of `--strict` level.

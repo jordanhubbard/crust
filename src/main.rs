@@ -281,19 +281,46 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
         eprintln!("   Emitted  {}", rs_path.display());
     }
 
-    // ── Invoke rustc ─────────────────────────────────────────────────────────
+    // ── Invoke compiler ──────────────────────────────────────────────────────
     // Edition 2021 is required for `async fn`, edition-2018 path forms, and the
     // newer disjoint-closure-capture rules. Without `--edition` rustc defaults
     // to 2015 which rejects most of what Crust emits.
-    let status = Command::new("rustc")
-        .arg(&tmp_rs)
-        .arg("--edition=2021")
-        .arg("-o")
-        .arg(&opts.output)
-        .arg("-C")
-        .arg("opt-level=2")
+    //
+    // At --strict=3 (Ship) the contract is "rustc/clippy clean" (crust-o3a),
+    // so swap in `clippy-driver` (a drop-in rustc replacement that also runs
+    // clippy lints) and treat warnings as errors. If clippy-driver isn't
+    // installed, fall back to plain rustc with a warning.
+    let mut compiler_cmd = if opts.level >= StrictnessLevel::Ship && clippy_driver_available() {
+        let mut c = Command::new("clippy-driver");
+        c.arg(&tmp_rs)
+            .arg("--edition=2021")
+            .arg("-o")
+            .arg(&opts.output)
+            .arg("-C")
+            .arg("opt-level=2")
+            // -Dwarnings turns every clippy/rustc warning into a hard error
+            // so Ship mode literally enforces "clippy clean".
+            .arg("-Dwarnings");
+        c
+    } else {
+        if opts.level >= StrictnessLevel::Ship {
+            eprintln!(
+                "warning: clippy-driver not on PATH; --strict=3 falling back to rustc \
+                 without clippy lints. Install with: rustup component add clippy"
+            );
+        }
+        let mut c = Command::new("rustc");
+        c.arg(&tmp_rs)
+            .arg("--edition=2021")
+            .arg("-o")
+            .arg(&opts.output)
+            .arg("-C")
+            .arg("opt-level=2");
+        c
+    };
+    let status = compiler_cmd
         .status()
-        .map_err(|e| CrustError::runtime(format!("rustc not found: {}", e)))?;
+        .map_err(|e| CrustError::runtime(format!("rustc/clippy not found: {}", e)))?;
 
     let _ = fs::remove_file(&tmp_rs);
 
@@ -309,6 +336,18 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
     } else {
         Err(CrustError::Rustc)
     }
+}
+
+/// Whether `clippy-driver` is on PATH. Used at --strict=3 to swap rustc for
+/// clippy-driver (rustc-compatible CLI that additionally runs clippy lints).
+fn clippy_driver_available() -> bool {
+    Command::new("clippy-driver")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 // Keep the old build_file for backward compat (used in tests)

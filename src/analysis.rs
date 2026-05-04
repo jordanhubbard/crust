@@ -40,6 +40,10 @@ pub enum DiagnosticKind {
     /// lifetimes, user-defined macros without a hardcoded lowering, async
     /// blocks. Reported as warning at Develop+, error at Prove.
     UnsupportedFeature,
+    /// Variable shadowing: a `let NAME = …` rebinding a previously-bound
+    /// `NAME` in scope. Matches rustc's behaviour where this is legal but
+    /// often a source of confusion. Reported at Develop+ (crust-o3a).
+    Shadowing,
 }
 
 #[derive(Debug, Clone)]
@@ -274,8 +278,102 @@ impl Analyzer {
         //    the original width — `u8::MAX.wrapping_add(1)` returns 256, not
         //    0 (crust-6yj).
         self.collect_width_sensitive_methods(&f.body, &f.name, out);
+
+        // 6. Shadow detection at Develop+ (crust-o3a). `let x = 1; let x = 2;`
+        //    in the same scope or a let-binding in a child scope shadowing a
+        //    parameter is legal Rust but often a source of bugs.
+        let mut bound: Vec<String> = f
+            .params
+            .iter()
+            .filter(|p| !p.is_self)
+            .map(|p| p.name.clone())
+            .collect();
+        self.collect_shadows(&f.body, &f.name, &mut bound, out);
     }
 
+    fn collect_shadows(
+        &self,
+        block: &Block,
+        fn_name: &str,
+        bound: &mut Vec<String>,
+        out: &mut Vec<Diagnostic>,
+    ) {
+        let scope_start = bound.len();
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Let { name, .. } => {
+                    if bound.contains(name) {
+                        out.push(Diagnostic::warning(
+                            DiagnosticKind::Shadowing,
+                            fn_name,
+                            format!(
+                                "`let {}` shadows a previous binding of `{}` in scope; \
+                                 this is legal but often confusing (crust-o3a)",
+                                name, name
+                            ),
+                        ));
+                    }
+                    bound.push(name.clone());
+                }
+                Stmt::LetPat { pat, .. } => {
+                    collect_pat_idents(pat, bound, fn_name, out);
+                }
+                _ => {}
+            }
+        }
+        // Scope close — pop names introduced in this block.
+        bound.truncate(scope_start);
+    }
+}
+
+fn collect_pat_idents(
+    pat: &Pat,
+    bound: &mut Vec<String>,
+    _fn_name: &str,
+    _out: &mut Vec<Diagnostic>,
+) {
+    match pat {
+        Pat::Ident(name) => bound.push(name.clone()),
+        Pat::Tuple(ps) => {
+            for p in ps {
+                collect_pat_idents(p, bound, _fn_name, _out);
+            }
+        }
+        Pat::TupleStruct { fields, .. } => {
+            for p in fields {
+                collect_pat_idents(p, bound, _fn_name, _out);
+            }
+        }
+        Pat::Struct { fields, .. } => {
+            for (_, p) in fields {
+                collect_pat_idents(p, bound, _fn_name, _out);
+            }
+        }
+        Pat::Bind { name, pat } => {
+            bound.push(name.clone());
+            collect_pat_idents(pat, bound, _fn_name, _out);
+        }
+        Pat::Slice {
+            before,
+            rest,
+            after,
+            ..
+        } => {
+            for p in before {
+                collect_pat_idents(p, bound, _fn_name, _out);
+            }
+            if let Some(r) = rest {
+                bound.push(r.clone());
+            }
+            for p in after {
+                collect_pat_idents(p, bound, _fn_name, _out);
+            }
+        }
+        _ => {}
+    }
+}
+
+impl Analyzer {
     fn collect_width_sensitive_methods(
         &self,
         block: &Block,
