@@ -3960,3 +3960,336 @@ pub fn format_string(fmt: &str, args: &[Value]) -> Result<String, CrustError> {
 
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::eval::Interpreter;
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+
+    /// Run a complete Crust program and return its captured stdout lines.
+    fn run(src: &str) -> Vec<String> {
+        let tokens = Lexer::new(src).tokenize().expect("tokenize");
+        let prog = Parser::new(tokens).parse_program().expect("parse");
+        let mut interp = Interpreter::new();
+        interp.run(prog).expect("run");
+        std::mem::take(&mut interp.output)
+    }
+
+    /// Wrap a single expression in `fn main() { println!("{}", EXPR); }` and
+    /// return its captured Display form.
+    fn eval_to_string(expr: &str) -> String {
+        let src = format!("fn main() {{ println!(\"{{}}\", {}); }}", expr);
+        run(&src).join("\n")
+    }
+
+    /// Same as eval_to_string but uses `{:?}` (Debug formatting).
+    fn eval_debug(expr: &str) -> String {
+        let src = format!("fn main() {{ println!(\"{{:?}}\", {}); }}", expr);
+        run(&src).join("\n")
+    }
+
+    // ── Vec ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn vec_len_and_is_empty() {
+        assert_eq!(eval_to_string("vec![1, 2, 3].len()"), "3");
+        assert_eq!(eval_to_string("vec![1].is_empty()"), "false");
+    }
+
+    #[test]
+    fn vec_push_pop_roundtrip() {
+        let out = run("fn main() {\n\
+                 let mut v = vec![1, 2];\n\
+                 v.push(3);\n\
+                 println!(\"{:?}\", v);\n\
+                 let last = v.pop();\n\
+                 println!(\"{:?}\", last);\n\
+             }");
+        assert_eq!(out, vec!["[1, 2, 3]", "Some(3)"]);
+    }
+
+    #[test]
+    fn vec_first_last_get() {
+        assert_eq!(eval_debug("vec![10, 20, 30].first()"), "Some(10)");
+        assert_eq!(eval_debug("vec![10, 20, 30].last()"), "Some(30)");
+        assert_eq!(eval_debug("vec![10, 20, 30].get(1)"), "Some(20)");
+        assert_eq!(eval_debug("vec![10, 20, 30].get(99)"), "None");
+    }
+
+    #[test]
+    fn vec_contains_and_position() {
+        assert_eq!(eval_to_string("vec![1, 2, 3].contains(&2)"), "true");
+        assert_eq!(eval_to_string("vec![1, 2, 3].contains(&99)"), "false");
+        assert_eq!(
+            eval_debug("vec![10, 20, 30].iter().position(|x| *x == 20)"),
+            "Some(1)"
+        );
+    }
+
+    #[test]
+    fn vec_reverse_and_sort() {
+        let out = run("fn main() {\n\
+                 let mut v = vec![3, 1, 2];\n\
+                 v.sort();\n\
+                 println!(\"{:?}\", v);\n\
+                 v.reverse();\n\
+                 println!(\"{:?}\", v);\n\
+             }");
+        assert_eq!(out, vec!["[1, 2, 3]", "[3, 2, 1]"]);
+    }
+
+    #[test]
+    fn vec_iter_map_filter_collect() {
+        assert_eq!(
+            eval_debug("vec![1, 2, 3, 4].iter().map(|x| x * 10).collect::<Vec<i64>>()"),
+            "[10, 20, 30, 40]"
+        );
+        assert_eq!(
+            eval_debug("vec![1, 2, 3, 4].iter().filter(|x| *x % 2 == 0).collect::<Vec<i64>>()"),
+            "[2, 4]"
+        );
+    }
+
+    #[test]
+    fn vec_iter_sum_product_count() {
+        assert_eq!(eval_to_string("vec![1, 2, 3, 4].iter().sum::<i64>()"), "10");
+        assert_eq!(
+            eval_to_string("vec![1, 2, 3, 4].iter().product::<i64>()"),
+            "24"
+        );
+        assert_eq!(eval_to_string("vec![1, 2, 3, 4].iter().count()"), "4");
+    }
+
+    #[test]
+    fn vec_iter_min_max() {
+        assert_eq!(eval_debug("vec![3, 1, 4, 1, 5, 9].iter().min()"), "Some(1)");
+        assert_eq!(eval_debug("vec![3, 1, 4, 1, 5, 9].iter().max()"), "Some(9)");
+    }
+
+    #[test]
+    fn vec_iter_fold_and_reduce() {
+        assert_eq!(
+            eval_to_string("vec![1, 2, 3, 4].iter().fold(0, |acc, x| acc + x)"),
+            "10"
+        );
+        assert_eq!(
+            eval_debug("vec![1, 2, 3].iter().reduce(|a, b| if a > b { a } else { b })"),
+            "Some(3)"
+        );
+    }
+
+    #[test]
+    fn vec_iter_enumerate_zip_chain() {
+        assert_eq!(
+            eval_debug("vec![10, 20, 30].iter().enumerate().collect::<Vec<(usize, i64)>>()"),
+            "[(0, 10), (1, 20), (2, 30)]"
+        );
+        assert_eq!(
+            eval_debug("vec![1, 2].iter().chain(vec![3, 4].iter()).collect::<Vec<i64>>()"),
+            "[1, 2, 3, 4]"
+        );
+    }
+
+    #[test]
+    fn vec_iter_take_skip() {
+        assert_eq!(
+            eval_debug("vec![1, 2, 3, 4, 5].iter().take(3).collect::<Vec<i64>>()"),
+            "[1, 2, 3]"
+        );
+        assert_eq!(
+            eval_debug("vec![1, 2, 3, 4, 5].iter().skip(2).collect::<Vec<i64>>()"),
+            "[3, 4, 5]"
+        );
+    }
+
+    #[test]
+    fn vec_iter_any_all() {
+        assert_eq!(
+            eval_to_string("vec![1, 2, 3].iter().any(|x| *x > 2)"),
+            "true"
+        );
+        assert_eq!(
+            eval_to_string("vec![1, 2, 3].iter().all(|x| *x > 0)"),
+            "true"
+        );
+        assert_eq!(
+            eval_to_string("vec![1, 2, 3].iter().all(|x| *x > 1)"),
+            "false"
+        );
+    }
+
+    #[test]
+    fn vec_iter_find() {
+        assert_eq!(
+            eval_debug("vec![1, 2, 3].iter().find(|x| **x == 2)"),
+            "Some(2)"
+        );
+        assert_eq!(
+            eval_debug("vec![1, 2, 3].iter().find(|x| **x == 99)"),
+            "None"
+        );
+    }
+
+    // ── String ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn string_len_and_is_empty() {
+        assert_eq!(eval_to_string("\"hello\".len()"), "5");
+        assert_eq!(eval_to_string("\"\".is_empty()"), "true");
+        assert_eq!(eval_to_string("\"x\".is_empty()"), "false");
+    }
+
+    #[test]
+    fn string_to_uppercase_lowercase() {
+        assert_eq!(eval_to_string("\"Hello\".to_uppercase()"), "HELLO");
+        assert_eq!(eval_to_string("\"Hello\".to_lowercase()"), "hello");
+    }
+
+    #[test]
+    fn string_trim_split() {
+        assert_eq!(eval_to_string("\"  hi  \".trim()"), "hi");
+        assert_eq!(
+            eval_debug("\"a,b,c\".split(\",\").collect::<Vec<String>>()"),
+            "[\"a\", \"b\", \"c\"]"
+        );
+    }
+
+    #[test]
+    fn string_starts_ends_with_contains() {
+        assert_eq!(eval_to_string("\"hello\".starts_with(\"he\")"), "true");
+        assert_eq!(eval_to_string("\"hello\".ends_with(\"lo\")"), "true");
+        assert_eq!(eval_to_string("\"hello\".contains(\"ell\")"), "true");
+        assert_eq!(eval_to_string("\"hello\".contains(\"xyz\")"), "false");
+    }
+
+    #[test]
+    fn string_replace_repeat() {
+        assert_eq!(eval_to_string("\"hello\".replace(\"l\", \"L\")"), "heLLo");
+        assert_eq!(eval_to_string("\"ab\".repeat(3)"), "ababab");
+    }
+
+    #[test]
+    fn string_chars_iteration() {
+        assert_eq!(eval_to_string("\"abc\".chars().count()"), "3");
+    }
+
+    #[test]
+    fn string_parse_int_and_float() {
+        assert_eq!(eval_to_string("\"42\".parse::<i64>().unwrap()"), "42");
+    }
+
+    // ── HashMap ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn hashmap_insert_get_contains() {
+        let out = run("use std::collections::HashMap;\n\
+             fn main() {\n\
+                 let mut m = HashMap::new();\n\
+                 m.insert(\"a\", 1);\n\
+                 m.insert(\"b\", 2);\n\
+                 println!(\"{}\", m.len());\n\
+                 println!(\"{}\", m.contains_key(\"a\"));\n\
+                 println!(\"{:?}\", m.get(\"a\"));\n\
+                 println!(\"{:?}\", m.get(\"missing\"));\n\
+             }");
+        assert_eq!(out, vec!["2", "true", "Some(1)", "None"]);
+    }
+
+    #[test]
+    fn hashmap_entry_or_insert() {
+        let out = run("use std::collections::HashMap;\n\
+             fn main() {\n\
+                 let mut m: HashMap<String, i64> = HashMap::new();\n\
+                 *m.entry(\"k\".to_string()).or_insert(0) += 5;\n\
+                 *m.entry(\"k\".to_string()).or_insert(0) += 3;\n\
+                 println!(\"{}\", m[\"k\"]);\n\
+             }");
+        assert_eq!(out, vec!["8"]);
+    }
+
+    // ── Option ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn option_is_some_is_none_unwrap_or() {
+        assert_eq!(eval_to_string("Some(5).is_some()"), "true");
+        assert_eq!(eval_to_string("Some(5).is_none()"), "false");
+        assert_eq!(eval_to_string("Some(5).unwrap_or(0)"), "5");
+        assert_eq!(eval_to_string("None::<i64>.unwrap_or(99)"), "99");
+    }
+
+    #[test]
+    fn option_map_and_then() {
+        assert_eq!(eval_debug("Some(5).map(|x| x * 2)"), "Some(10)");
+        assert_eq!(eval_debug("Some(5).and_then(|x| Some(x + 1))"), "Some(6)");
+    }
+
+    // ── Result ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn result_is_ok_is_err_unwrap() {
+        assert_eq!(eval_to_string("Ok::<i64, String>(5).is_ok()"), "true");
+        assert_eq!(
+            eval_to_string("Err::<i64, String>(\"e\".to_string()).is_err()"),
+            "true"
+        );
+        assert_eq!(eval_to_string("Ok::<i64, String>(5).unwrap()"), "5");
+        assert_eq!(eval_to_string("Ok::<i64, String>(5).unwrap_or(99)"), "5");
+        assert_eq!(
+            eval_to_string("Err::<i64, String>(\"x\".to_string()).unwrap_or(99)"),
+            "99"
+        );
+    }
+
+    // ── Range ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn range_iter_collect_sum_count() {
+        assert_eq!(
+            eval_debug("(0..5).collect::<Vec<i64>>()"),
+            "[0, 1, 2, 3, 4]"
+        );
+        assert_eq!(eval_debug("(1..=4).collect::<Vec<i64>>()"), "[1, 2, 3, 4]");
+        assert_eq!(eval_to_string("(1..=10).sum::<i64>()"), "55");
+        assert_eq!(eval_to_string("(0..100).count()"), "100");
+    }
+
+    #[test]
+    fn range_iter_map_filter() {
+        assert_eq!(
+            eval_debug("(1..=5).map(|x| x * x).collect::<Vec<i64>>()"),
+            "[1, 4, 9, 16, 25]"
+        );
+        assert_eq!(
+            eval_debug("(1..=10).filter(|x| x % 2 == 0).collect::<Vec<i64>>()"),
+            "[2, 4, 6, 8, 10]"
+        );
+    }
+
+    // ── Numeric ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn integer_abs_pow() {
+        assert_eq!(eval_to_string("(-5i64).abs()"), "5");
+        assert_eq!(eval_to_string("2i64.pow(10)"), "1024");
+    }
+
+    #[test]
+    fn float_basic_methods() {
+        assert_eq!(eval_to_string("16.0_f64.sqrt()"), "4");
+        assert_eq!(eval_to_string("3.7_f64.floor()"), "3");
+        assert_eq!(eval_to_string("3.7_f64.ceil()"), "4");
+        assert_eq!(eval_to_string("3.7_f64.round()"), "4");
+        assert_eq!(eval_to_string("(-3.0_f64).abs()"), "3");
+    }
+
+    // ── char ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn char_methods() {
+        assert_eq!(eval_to_string("'a'.is_alphabetic()"), "true");
+        assert_eq!(eval_to_string("'1'.is_numeric()"), "true");
+        assert_eq!(eval_to_string("'a'.is_uppercase()"), "false");
+        assert_eq!(eval_to_string("'A'.is_uppercase()"), "true");
+    }
+}
