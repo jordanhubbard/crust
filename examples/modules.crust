@@ -1,0 +1,26 @@
+// Inline modules: parsed, interpreted, and round-tripped through `crust build`.
+// Path-based `mod foo;` (file modules) is not yet supported (see crust-rvq).
+
+mod geom {
+    pub struct Point { x: i64, y: i64 }
+
+    impl Point {
+        pub fn new(x: i64, y: i64) -> Point {
+            Point { x: x, y: y }
+        }
+
+        pub fn manhattan(self) -> i64 {
+            self.x + self.y
+        }
+    }
+
+    pub mod consts {
+        pub fn origin_distance() -> i64 { 0 }
+    }
+}
+
+fn main() {
+    let p = geom::Point::new(3, 4);
+    println!("manhattan = {}", p.manhattan());
+    println!("origin    = {}", geom::consts::origin_distance());
+}

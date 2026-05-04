@@ -198,10 +198,27 @@ pub enum Item {
     Struct(StructDef),
     Enum(EnumDef),
     Impl(ImplDef),
-    Trait { name: String, methods: Vec<FnDef> },
+    Trait {
+        name: String,
+        methods: Vec<FnDef>,
+    },
     Use(Vec<String>),
-    Const { name: String, ty: Ty, value: Expr },
-    TypeAlias { name: String, ty: Ty },
+    Const {
+        name: String,
+        ty: Ty,
+        value: Expr,
+    },
+    TypeAlias {
+        name: String,
+        ty: Ty,
+    },
+    /// Inline module: `mod NAME { items }`. File-based `mod foo;` is not yet
+    /// supported (tracked separately).  The interpreter registers inner items
+    /// with their fully-qualified `NAME::ident` key so `NAME::ident()` resolves.
+    Mod {
+        name: String,
+        items: Vec<Item>,
+    },
 }
 
 /// Crust-specific attributes parsed from `#[name]` or `#[name(expr)]` syntax.

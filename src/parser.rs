@@ -254,11 +254,42 @@ impl Parser {
                 self.advance();
                 self.parse_trait()
             }
+            TokenKind::Mod => {
+                self.advance();
+                self.parse_mod()
+            }
             other => Err(CrustError::parse(
                 format!("unexpected token at item level: {:?}", other),
                 self.line(),
             )),
         }
+    }
+
+    /// `mod NAME { items }` — inline module. File-based `mod foo;` is rejected
+    /// here with a clear diagnostic so callers know it's not yet implemented.
+    fn parse_mod(&mut self) -> Result<Item> {
+        let name = self.expect_ident()?;
+        if self.eat(&TokenKind::Semi) {
+            return Err(CrustError::parse(
+                format!(
+                    "`mod {};` (file-based module) is not supported yet; \
+                     use inline `mod {} {{ ... }}` for now",
+                    name, name
+                ),
+                self.line(),
+            ));
+        }
+        self.expect(&TokenKind::LBrace)?;
+        let mut items = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
+            self.eat(&TokenKind::Semi);
+            if self.check(&TokenKind::RBrace) {
+                break;
+            }
+            items.push(self.parse_item()?);
+        }
+        self.expect(&TokenKind::RBrace)?;
+        Ok(Item::Mod { name, items })
     }
 
     fn parse_fn_def(&mut self) -> Result<FnDef> {

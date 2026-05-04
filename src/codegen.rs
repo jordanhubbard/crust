@@ -8,6 +8,12 @@ pub struct Codegen {
     /// When true, ownership-transfer comments are injected at every clone/move site,
     /// making LLM-generated code auditable by human reviewers.
     pub llm_mode: bool,
+    /// When true, emit `pub` on every item, struct field, and impl method.
+    /// Set while emitting the body of `mod NAME { ... }` since the parser
+    /// strips author-supplied `pub` (proper visibility tracking is in
+    /// crust-1x4). Without this, items inside a module are private and
+    /// outside callers hit E0603 / E0624.
+    force_pub: bool,
 }
 
 impl Codegen {
@@ -18,6 +24,7 @@ impl Codegen {
             indent: 0,
             level: StrictnessLevel::Explore,
             llm_mode: false,
+            force_pub: false,
         }
     }
 
@@ -26,6 +33,17 @@ impl Codegen {
             indent: 0,
             level,
             llm_mode: false,
+            force_pub: false,
+        }
+    }
+
+    /// `pub ` prefix to emit before each item / field / method when inside a
+    /// `mod` block. Empty otherwise.
+    fn pub_kw(&self) -> &'static str {
+        if self.force_pub {
+            "pub "
+        } else {
+            ""
         }
     }
 
@@ -75,15 +93,48 @@ impl Codegen {
                 out.push_str("}\n");
                 out
             }
+            Item::Mod { name, items } => {
+                let pub_kw = self.pub_kw();
+                let mut out = format!("{}mod {} {{\n", pub_kw, name);
+                self.indent += 1;
+                let saved_force_pub = self.force_pub;
+                // At Level <Ship, expose every item, field, and method inside
+                // the module so outside callers can reach them. Crust does not
+                // yet track per-item `pub` (crust-1x4). At Level Ship+, leave
+                // visibility alone — at that strictness Crust is supposed to
+                // be source-level rustc-equivalent.
+                self.force_pub = self.level < StrictnessLevel::Ship;
+                for item in items {
+                    let body = self.emit_item(item);
+                    for line in body.lines() {
+                        if line.is_empty() {
+                            out.push('\n');
+                        } else {
+                            out.push_str(&format!("{}{}\n", self.indent_str(), line));
+                        }
+                    }
+                }
+                self.force_pub = saved_force_pub;
+                self.indent -= 1;
+                out.push_str("}\n");
+                out
+            }
         }
     }
 
     fn emit_struct(&mut self, s: &StructDef) -> String {
         let mut out = String::new();
         out.push_str(&self.emit_type_attrs(&s.attrs));
-        out.push_str(&format!("struct {} {{\n", s.name));
+        let kw = self.pub_kw();
+        let field_pub = self.pub_kw();
+        out.push_str(&format!("{}struct {} {{\n", kw, s.name));
         for (name, ty) in &s.fields {
-            out.push_str(&format!("    {}: {},\n", name, self.emit_ty(ty)));
+            out.push_str(&format!(
+                "    {}{}: {},\n",
+                field_pub,
+                name,
+                self.emit_ty(ty)
+            ));
         }
         out.push_str("}\n");
         out
@@ -92,7 +143,8 @@ impl Codegen {
     fn emit_enum(&mut self, e: &EnumDef) -> String {
         let mut out = String::new();
         out.push_str(&self.emit_type_attrs(&e.attrs));
-        out.push_str(&format!("enum {} {{\n", e.name));
+        let kw = self.pub_kw();
+        out.push_str(&format!("{}enum {} {{\n", kw, e.name));
         for v in &e.variants {
             out.push_str("    ");
             out.push_str(&v.name);
@@ -191,6 +243,7 @@ impl Codegen {
 
     fn emit_fn(&mut self, f: &FnDef) -> String {
         let ind = self.indent_str();
+        let pub_kw = self.pub_kw();
 
         // Emit attributes.  At Level 3+, re-emit all unknown attrs (e.g. derive, allow).
         // Crust-specific attrs (requires/ensures/invariant/pure) are emitted as comments
@@ -245,8 +298,8 @@ impl Codegen {
 
         let async_kw = if f.is_async { "async " } else { "" };
         out.push_str(&format!(
-            "{}{}fn {}({}){} {{\n",
-            ind, async_kw, f.name, params, ret
+            "{}{}{}fn {}({}){} {{\n",
+            ind, pub_kw, async_kw, f.name, params, ret
         ));
         self.indent += 1;
         for stmt in &f.body.stmts {
@@ -297,6 +350,7 @@ impl Codegen {
                     indent: self.indent,
                     level: self.level,
                     llm_mode: self.llm_mode,
+                    force_pub: self.force_pub,
                 };
                 cg.emit_item(item)
             }

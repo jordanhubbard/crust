@@ -103,6 +103,11 @@ impl ContractChecker {
                         extract_fn_vcs(method, &mut vcs);
                     }
                 }
+                // Recurse into inline modules so contracts on functions inside
+                // `mod foo { ... }` are still extracted for SMT discharge.
+                Item::Mod { items: inner, .. } => {
+                    vcs.extend(Self::extract_vcs(inner));
+                }
                 _ => {}
             }
         }

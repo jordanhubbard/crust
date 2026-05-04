@@ -101,6 +101,12 @@ impl Analyzer {
                         diags.extend(self.analyze_fn(method));
                     }
                 }
+                // Recurse into inline modules so their inner functions are
+                // still subject to panic-freedom, overflow, and llm-mode
+                // guardrail checks (crust-rvq).
+                Item::Mod { items: inner, .. } => {
+                    diags.extend(self.analyze_program(inner));
+                }
                 _ => {}
             }
         }

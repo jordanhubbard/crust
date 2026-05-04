@@ -415,10 +415,25 @@ impl Interpreter {
     }
 
     fn register_item(&mut self, item: Item) -> Result<(), CrustError> {
+        self.register_item_in(item, "")
+    }
+
+    /// Register an item under an optional module prefix. Inline `mod NAME { ... }`
+    /// recursively calls this with `prefix = "NAME::"` so inner items live at
+    /// `NAME::ident`. Bare names continue to work for top-level resolution.
+    fn register_item_in(&mut self, item: Item, prefix: &str) -> Result<(), CrustError> {
+        let qualify = |n: &str| -> String {
+            if prefix.is_empty() {
+                n.to_string()
+            } else {
+                format!("{}{}", prefix, n)
+            }
+        };
         match item {
             Item::Fn(def) => {
+                let key = qualify(&def.name);
                 self.fns.insert(
-                    def.name.clone(),
+                    key,
                     CrustFn {
                         params: def.params,
                         ret_ty: def.ret_ty,
@@ -428,13 +443,15 @@ impl Interpreter {
                 );
             }
             Item::Struct(def) => {
-                self.structs.insert(def.name.clone(), def);
+                let key = qualify(&def.name);
+                self.structs.insert(key, def);
             }
             Item::Enum(def) => {
-                self.enums.insert(def.name.clone(), def);
+                let key = qualify(&def.name);
+                self.enums.insert(key, def);
             }
             Item::Trait { name, methods } => {
-                self.traits.insert(name, methods);
+                self.traits.insert(qualify(&name), methods);
             }
             Item::Impl(def) => {
                 // If this is `impl TraitName for TypeName`, inject default trait methods
@@ -474,15 +491,22 @@ impl Interpreter {
                 }
             }
             Item::Const { name, value, .. } => {
+                let key = qualify(&name);
                 let env = Rc::new(RefCell::new(Env::new()));
                 let v = self.eval_expr(&value, env).map_err(|s| match s {
                     Signal::Err(e) => e,
                     _ => CrustError::runtime(format!(
                         "non-error control-flow signal evaluating const `{}`",
-                        name
+                        key
                     )),
                 })?;
-                self.consts.insert(name, v);
+                self.consts.insert(key, v);
+            }
+            Item::Mod { name, items } => {
+                let inner_prefix = format!("{}{}::", prefix, name);
+                for item in items {
+                    self.register_item_in(item, &inner_prefix)?;
+                }
             }
             Item::Use(path) => {
                 // `use SomeEnum::*` — register all variants as constructors in global env
@@ -934,8 +958,14 @@ impl Interpreter {
                     Expr::Path(parts) => {
                         let fn_name = parts.last().unwrap().clone();
                         if parts.len() > 1 {
-                            // Use only the immediate type name, stripping namespace prefixes.
-                            // std::collections::HashMap::new → type="HashMap", fn="new"
+                            // Try fully-qualified module-path first: `inner::hello`,
+                            // `outer::inner::hello`, etc., are registered under that
+                            // exact key by Item::Mod. If not found, fall back to
+                            // type-static dispatch (HashMap::new, i64::from_str, …).
+                            let full = parts.join("::");
+                            if self.fns.contains_key(&full) {
+                                return self.call_fn(&full, arg_vals, Rc::clone(&env));
+                            }
                             let type_name = parts[parts.len() - 2].clone();
                             self.call_method_or_static(
                                 &type_name,

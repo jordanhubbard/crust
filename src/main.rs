@@ -262,8 +262,11 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
     }
 
     // ── Write generated .rs ───────────────────────────────────────────────────
+    // Use a per-process temp file path so concurrent `crust build` invocations
+    // (e.g. cargo test running multiple integration tests in parallel) don't
+    // race on a shared `__crust_build.rs` and clobber each other.
     let tmp_dir = std::env::temp_dir();
-    let tmp_rs = tmp_dir.join("__crust_build.rs");
+    let tmp_rs = tmp_dir.join(format!("__crust_build_{}.rs", std::process::id()));
     fs::write(&tmp_rs, &rs_source)?;
 
     if opts.emit_rs {
