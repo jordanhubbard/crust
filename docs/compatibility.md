@@ -85,7 +85,11 @@ the following ways to remain teaching-friendly at Level 0:
 3. **Generics are type-erased in the interpreter.** `fn max<T: Ord>(a: T, b: T) -> T` runs at `crust run` because Crust's `>` is value-polymorphic; nothing is monomorphised. Codegen passes the generics to rustc which performs real monomorphisation.
 4. **References are identity at runtime.** `&x` evaluates to `x`, `*y` evaluates to `y`. `Rc`, `Arc`, `Cell`, `RefCell` are treated as transparent containers (at the interpreter level only; codegen keeps them).
 5. **All integers are `i64` in the interpreter.** Cast operations (`x as u32`) happen at codegen but are no-ops in `crust run` (`crust-6yj`).
-6. **HashMap iteration is insertion-ordered, not random.** Stdlib `std::collections::HashMap` doesn't promise this, but Crust's HashMap-backed value preserves insertion order to make examples deterministic. Don't rely on this matching rustc's runtime behaviour.
+6. **HashMap iteration is sorted by key, not random.** Stdlib `std::collections::HashMap` randomises iteration order; Crust sorts by key for deterministic test output. `BTreeMap` iteration also lands in sorted order (matches rustc) by virtue of the same backing. Programs that rely on a specific HashMap iteration order are non-portable to rustc — don't write them.
+
+7. **`BTreeSet` iterates in insertion order, not sorted order.** This *is* a divergence from rustc and is tracked by `crust-4ri`. Use `BTreeMap` (which iterates sorted) until that bead lands, or sort the result yourself.
+
+8. **`VecDeque::push_front` is O(n)** because Crust backs the deque with a `Vec`. The visible semantics match rustc; only the asymptotic cost differs.
 
 ---
 
