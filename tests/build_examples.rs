@@ -98,20 +98,7 @@ fn run_and_capture(path: &std::path::Path) -> String {
 /// Examples whose codegen does not yet produce valid Rust.
 /// Each entry is the file name (under examples/) and a short reason.
 /// Remove an entry once the underlying codegen issue is resolved.
-const KNOWN_FAILING: &[(&str, &str)] = &[
-    (
-        "iterators.crust",
-        "iter() ref/owned mismatch with explicit *deref (crust-ovw)",
-    ),
-    (
-        "option_result.crust",
-        "non-exhaustive match without auto-wildcard (crust-o3a)",
-    ),
-    (
-        "patterns.crust",
-        "refutable pattern in let-binding (crust-ovw)",
-    ),
-];
+const KNOWN_FAILING: &[(&str, &str)] = &[];
 
 #[test]
 fn examples_build_or_match_known_failing() {

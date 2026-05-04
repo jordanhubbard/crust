@@ -1754,19 +1754,27 @@ impl Parser {
                     } else {
                         None
                     };
-                    // Build match arms; add wildcard arm for the else branch if present
+                    // Build match arms; add a wildcard arm for the else
+                    // branch (or `_ => ()` when no explicit else) so the
+                    // generated match is exhaustive — rustc rejects an
+                    // `if let` -> match lowering without it (E0004).
                     let mut arms = vec![MatchArm {
                         pat: _pat,
                         guard: None,
                         body: Expr::Block(then_block),
                     }];
-                    if let Some(else_b) = else_expr {
-                        arms.push(MatchArm {
-                            pat: Pat::Wild,
-                            guard: None,
-                            body: *else_b,
-                        });
-                    }
+                    let else_body = match else_expr {
+                        Some(e) => *e,
+                        None => Expr::Block(Block {
+                            stmts: vec![],
+                            tail: None,
+                        }),
+                    };
+                    arms.push(MatchArm {
+                        pat: Pat::Wild,
+                        guard: None,
+                        body: else_body,
+                    });
                     return Ok(Expr::Match {
                         scrutinee: Box::new(scrutinee),
                         arms,

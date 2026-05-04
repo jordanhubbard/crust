@@ -392,7 +392,12 @@ impl Codegen {
                     .unwrap_or_default();
                 format!("let {}{}{}{};", mut_str, name, ty_str, init_str)
             }
-            Stmt::LetPat { pat, ty, init, .. } => {
+            Stmt::LetPat {
+                pat,
+                ty,
+                init,
+                else_block,
+            } => {
                 let ty_str = ty
                     .as_ref()
                     .map(|t| format!(": {}", self.emit_ty(t)))
@@ -401,7 +406,22 @@ impl Codegen {
                     .as_ref()
                     .map(|e| format!(" = {}", self.emit_expr_level0(e)))
                     .unwrap_or_default();
-                format!("let {}{}{};", emit_pat(pat), ty_str, init_str)
+                // `let PAT = EXPR else { … };` (let-else) — refutable
+                // pattern with explicit divergence. Without the else, rustc
+                // rejects refutable patterns in let bindings (E0005). At
+                // Level <Ship, when neither the user nor the parser supplied
+                // an else block but the pattern is refutable (Slice with
+                // varying length, TupleStruct, Struct, Or, Range, Bind),
+                // synthesise an `else { unreachable!() }` so the program
+                // compiles under Crust's "Level 0 forgives" philosophy.
+                let else_str = match else_block {
+                    Some(b) => format!(" else {}", self.emit_block_as_expr(b)),
+                    None if pat_is_refutable(pat) && self.level < StrictnessLevel::Ship => {
+                        " else { unreachable!() }".to_string()
+                    }
+                    None => String::new(),
+                };
+                format!("let {}{}{}{};", emit_pat(pat), ty_str, init_str, else_str)
             }
             Stmt::Semi(e) => format!("{};", self.emit_expr(e)),
             Stmt::Expr(e) => self.emit_expr(e),
@@ -597,11 +617,41 @@ impl Codegen {
                 turbofish,
                 args,
             } => {
+                // Ownership-relaxation rewrite for closure args inside an
+                // `.iter()` chain at Level <Ship (crust-ovw).
+                //
+                // After `.iter().cloned()`, owned-by-value iterator methods
+                // (`map`, `fold`, `for_each`, …) receive `T`, so user-written
+                // `*p` derefs of the closure param become invalid (E0614).
+                // Reference-taking iterator methods (`filter`, `any`, `all`,
+                // `find`, `position`, `take_while`, `skip_while`) still
+                // receive `&T`, so the user's `*p` stays correct.
+                //
+                // Strip `*p` only in the owned-by-value branch.
+                let strip_in_closures = self.level < StrictnessLevel::Ship
+                    && chain_starts_with_iter(receiver)
+                    && iter_method_takes_owned(method);
+
                 let args_str = args
                     .iter()
-                    .map(|a| self.emit_expr_level0(a))
+                    .map(|a| {
+                        if strip_in_closures {
+                            if let Expr::Closure { params, body } = a {
+                                let names = closure_param_names(params);
+                                let mut new_body = (**body).clone();
+                                strip_param_derefs(&mut new_body, &names);
+                                let rewritten = Expr::Closure {
+                                    params: params.clone(),
+                                    body: Box::new(new_body),
+                                };
+                                return self.emit_expr_level0(&rewritten);
+                            }
+                        }
+                        self.emit_expr_level0(a)
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
+
                 let tf = match turbofish {
                     Some(tys) if !tys.is_empty() => {
                         let parts = tys
@@ -815,10 +865,14 @@ impl Codegen {
                     .map(|e| self.emit_expr(e))
                     .unwrap_or_default();
                 let e = end.as_ref().map(|e| self.emit_expr(e)).unwrap_or_default();
+                // Always wrap Range in parens so it composes in
+                // method-call receiver position: `1..=100.sum()` would
+                // otherwise parse as `1..=(100.sum())` since `.` binds
+                // tighter than `..=`.
                 if *inclusive {
-                    format!("{}..={}", s, e)
+                    format!("({}..={})", s, e)
                 } else {
-                    format!("{}..{}", s, e)
+                    format!("({}..{})", s, e)
                 }
             }
 
@@ -840,6 +894,13 @@ impl Codegen {
         }
     }
 
+    fn emit_block_as_expr(&self, block: &Block) -> String {
+        let mut out = String::from("{\n");
+        out.push_str(&self.emit_block_body(block));
+        out.push('}');
+        out
+    }
+
     fn emit_block_body(&self, block: &Block) -> String {
         let mut out = String::new();
         for stmt in &block.stmts {
@@ -849,6 +910,199 @@ impl Codegen {
             out.push_str(&format!("    {}\n", self.emit_expr(tail)));
         }
         out
+    }
+}
+
+/// True if the pattern can fail to match a value of the bound expression's
+/// type. `Ident` and `Wild` are irrefutable; everything else is generally
+/// refutable. Crust uses this to decide when a `let PAT = EXPR;` binding
+/// needs an auto-injected `else { unreachable!() }` for rustc's E0005.
+fn pat_is_refutable(pat: &Pat) -> bool {
+    match pat {
+        Pat::Wild | Pat::Ident(_) => false,
+        Pat::Tuple(ps) => ps.iter().any(pat_is_refutable),
+        // All other patterns are refutable in general.
+        _ => true,
+    }
+}
+
+/// Iterator methods whose closures receive *owned* `Self::Item` (per the
+/// std::iter::Iterator signatures). After Crust's `.iter().cloned()`
+/// injection these closures see `T`, so user `*p` derefs are invalid and
+/// need stripping. Reference-taking methods receive `&T` and keep `*p`
+/// as written.
+fn iter_method_takes_owned(name: &str) -> bool {
+    matches!(
+        name,
+        // FnMut(Self::Item) -> ...
+        "map"
+            | "filter_map"
+            | "flat_map"
+            | "for_each"
+            | "scan"
+            | "any"
+            | "all"
+            | "position"
+            // FnMut(B, Self::Item) -> B  (the Self::Item arg is owned)
+            | "fold"
+            | "reduce"
+    )
+}
+
+/// True if `expr` is a method-call chain whose root receiver is `.iter()`.
+/// Used by the ownership-relaxation rewrite (crust-ovw) to decide whether
+/// closure-body `*p` strip-down is in scope.
+fn chain_starts_with_iter(expr: &Expr) -> bool {
+    let mut cur = expr;
+    loop {
+        match cur {
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                turbofish,
+            } => {
+                if method == "iter" && args.is_empty() && turbofish.is_none() {
+                    return true;
+                }
+                cur = receiver;
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Collect the simple parameter names of a closure (`|x, y| …` → `["x", "y"]`).
+/// Tuple- and pattern-shaped closure params don't bind a single identifier so
+/// they're not eligible for the deref-strip rewrite.
+fn closure_param_names(params: &[ClosureParam]) -> Vec<String> {
+    params
+        .iter()
+        .filter_map(|p| match p {
+            ClosureParam::Simple(n) => Some(n.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Walk `expr` and replace `Expr::Deref(Expr::Ident(p))` with `Expr::Ident(p)`
+/// whenever `p` is in `params`. Used to neutralise user-written `*p` derefs
+/// in closure bodies after Crust has already lowered the iterator chain to
+/// yield owned `T` (via `.iter().cloned()`).
+fn strip_param_derefs(expr: &mut Expr, params: &[String]) {
+    // Fixpoint over the current node so `**x` → `x`.
+    loop {
+        if let Expr::Deref(inner) = expr {
+            if let Expr::Ident(name) = inner.as_ref() {
+                if params.contains(name) {
+                    *expr = Expr::Ident(name.clone());
+                    continue;
+                }
+            }
+        }
+        break;
+    }
+    match expr {
+        Expr::Unary(_, e)
+        | Expr::Deref(e)
+        | Expr::Try(e)
+        | Expr::Await(e)
+        | Expr::Cast(e, _)
+        | Expr::Field(e, _)
+        | Expr::Ref { expr: e, .. } => strip_param_derefs(e, params),
+        Expr::Binary(_, l, r)
+        | Expr::Assign(l, r)
+        | Expr::OpAssign(_, l, r)
+        | Expr::Index(l, r) => {
+            strip_param_derefs(l, params);
+            strip_param_derefs(r, params);
+        }
+        Expr::Call { func, args } => {
+            strip_param_derefs(func, params);
+            for a in args {
+                strip_param_derefs(a, params);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            strip_param_derefs(receiver, params);
+            for a in args {
+                strip_param_derefs(a, params);
+            }
+        }
+        Expr::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
+            strip_param_derefs(cond, params);
+            strip_block_param_derefs(then_block, params);
+            if let Some(eb) = else_block {
+                strip_param_derefs(eb, params);
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            strip_param_derefs(scrutinee, params);
+            for arm in arms {
+                if let Some(g) = &mut arm.guard {
+                    strip_param_derefs(g, params);
+                }
+                strip_param_derefs(&mut arm.body, params);
+            }
+        }
+        Expr::Block(b) | Expr::Unsafe(b) => strip_block_param_derefs(b, params),
+        Expr::Closure { params: cp, body } => {
+            // A nested closure introduces its own params; don't strip those,
+            // but our params still apply if they're referenced in the body.
+            // Build the *difference* set by removing names the inner closure
+            // shadows. (Examples don't shadow; correctness over pragmatism.)
+            let inner: Vec<String> = closure_param_names(cp);
+            let outer_only: Vec<String> = params
+                .iter()
+                .filter(|p| !inner.contains(p))
+                .cloned()
+                .collect();
+            strip_param_derefs(body, &outer_only);
+        }
+        Expr::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                strip_param_derefs(e, params);
+            }
+        }
+        Expr::Array(elems) | Expr::Tuple(elems) | Expr::Macro { args: elems, .. } => {
+            for e in elems {
+                strip_param_derefs(e, params);
+            }
+        }
+        Expr::Range { start, end, .. } => {
+            if let Some(s) = start {
+                strip_param_derefs(s, params);
+            }
+            if let Some(e) = end {
+                strip_param_derefs(e, params);
+            }
+        }
+        Expr::Return(Some(e)) | Expr::Break(_, Some(e)) => strip_param_derefs(e, params),
+        // Leaves
+        Expr::Lit(_)
+        | Expr::Ident(_)
+        | Expr::Path(_)
+        | Expr::Continue(_)
+        | Expr::Return(None)
+        | Expr::Break(_, None) => {}
+    }
+}
+
+fn strip_block_param_derefs(block: &mut Block, params: &[String]) {
+    for stmt in &mut block.stmts {
+        match stmt {
+            Stmt::Semi(e) | Stmt::Expr(e) => strip_param_derefs(e, params),
+            Stmt::Let { init: Some(e), .. } => strip_param_derefs(e, params),
+            Stmt::LetPat { init: Some(e), .. } => strip_param_derefs(e, params),
+            _ => {}
+        }
+    }
+    if let Some(tail) = &mut block.tail {
+        strip_param_derefs(tail, params);
     }
 }
 
