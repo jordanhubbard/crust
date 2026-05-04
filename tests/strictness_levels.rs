@@ -156,6 +156,33 @@ fn lower_levels_do_not_invoke_clippy() {
 }
 
 #[test]
+fn std_only_program_does_not_emit_cargo_note() {
+    ensure_built();
+    let (_ok, stderr) = build(
+        "std_only",
+        "use std::collections::HashMap;\n\
+         fn main() { let _: HashMap<i64, i64> = HashMap::new(); }",
+        "0",
+    );
+    assert!(
+        !stderr.contains("crust-ti9"),
+        "std-only program must not trigger the cargo-detection note, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn non_std_import_emits_cargo_note() {
+    ensure_built();
+    let (_ok, stderr) = build("non_std", "use serde::Deserialize;\nfn main() {}", "0");
+    assert!(
+        stderr.contains("crust-ti9") && stderr.contains("--extern"),
+        "non-std import must trigger the cargo note pointing to --extern, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
 fn shadowing_param_in_body_is_caught() {
     ensure_built();
     let (_ok, stderr) = build(

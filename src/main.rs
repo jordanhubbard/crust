@@ -79,6 +79,13 @@ struct BuildOptions {
     level: StrictnessLevel,
     llm_mode: bool,
     verify: bool,
+    /// `--extern NAME=PATH` flags forwarded to rustc/clippy-driver. Lets
+    /// users link against precompiled crates (e.g. those built by cargo
+    /// elsewhere) without Crust having a full Cargo.toml integration
+    /// (crust-ti9).
+    externs: Vec<String>,
+    /// `-L PATH` flags forwarded to rustc for crate-search dirs.
+    lib_paths: Vec<String>,
 }
 
 impl Default for BuildOptions {
@@ -91,6 +98,8 @@ impl Default for BuildOptions {
             level: StrictnessLevel::Explore,
             llm_mode: false,
             verify: false,
+            externs: Vec::new(),
+            lib_paths: Vec::new(),
         }
     }
 }
@@ -121,6 +130,20 @@ fn parse_build_options(args: &[String]) -> Result<BuildOptions> {
             "--verify" => {
                 opts.verify = true;
                 i += 1;
+            }
+            "--extern" => {
+                let arg = args.get(i + 1).cloned().ok_or_else(|| {
+                    CrustError::runtime("--extern requires an argument like NAME=PATH")
+                })?;
+                opts.externs.push(arg);
+                i += 2;
+            }
+            "-L" => {
+                let arg = args.get(i + 1).cloned().ok_or_else(|| {
+                    CrustError::runtime("-L requires an argument (a directory path)")
+                })?;
+                opts.lib_paths.push(arg);
+                i += 2;
             }
             s if s.starts_with("--strict=") => {
                 let suffix = &s["--strict=".len()..];
@@ -281,6 +304,30 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
         eprintln!("   Emitted  {}", rs_path.display());
     }
 
+    // ── Cargo.toml + non-std import diagnostic ──────────────────────────────
+    // crust-ti9: Crust is single-file today and does not integrate with cargo
+    // workspaces. Emit a friendly note when the program imports something
+    // that's clearly not std (the actionable case for `cargo build` /
+    // `--extern`). Sitting next to a Cargo.toml without any non-std import
+    // is fine — examples in this repo do that and shouldn't be noisy.
+    if has_non_std_import(&program) {
+        if let Some(cargo_path) = find_cargo_toml_above(&opts.source_file) {
+            eprintln!(
+                "note: program imports a non-std crate and a Cargo.toml exists at {}; \
+                 crust does not yet integrate with cargo workspaces — use `cargo build` \
+                 for full crate-graph builds, or pass precompiled crates via \
+                 `--extern NAME=PATH` and `-L /path/to/deps` (crust-ti9)",
+                cargo_path.display()
+            );
+        } else {
+            eprintln!(
+                "note: program imports a non-std crate; crust ships only std-aware codegen. \
+                 Pass precompiled crates via `--extern NAME=PATH` and `-L /path/to/deps` \
+                 (crust-ti9)"
+            );
+        }
+    }
+
     // ── Invoke compiler ──────────────────────────────────────────────────────
     // Edition 2021 is required for `async fn`, edition-2018 path forms, and the
     // newer disjoint-closure-capture rules. Without `--edition` rustc defaults
@@ -318,6 +365,13 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
             .arg("opt-level=2");
         c
     };
+    // Pass-through flags for users with precompiled crates (crust-ti9).
+    for ext in &opts.externs {
+        compiler_cmd.arg("--extern").arg(ext);
+    }
+    for path in &opts.lib_paths {
+        compiler_cmd.arg("-L").arg(path);
+    }
     let status = compiler_cmd
         .status()
         .map_err(|e| CrustError::runtime(format!("rustc/clippy not found: {}", e)))?;
@@ -335,6 +389,56 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
         Ok(())
     } else {
         Err(CrustError::Rustc)
+    }
+}
+
+/// True if the program contains a `use` statement whose root segment is
+/// neither std/core/alloc nor a self/super/crate path. The point: detect
+/// the case where `crust build` will actually need an external crate that
+/// rustc can't resolve without `--extern`. Used by the cargo-detection
+/// diagnostic to stay quiet for std-only programs (crust-ti9).
+fn has_non_std_import(items: &[ast::Item]) -> bool {
+    fn check(items: &[ast::Item]) -> bool {
+        for item in items {
+            match item {
+                ast::Item::Use(path) => {
+                    let head = path.first().map(|s| s.as_str()).unwrap_or("");
+                    let std_or_internal = matches!(
+                        head,
+                        "std" | "core" | "alloc" | "self" | "super" | "crate" | "Self"
+                    );
+                    if !std_or_internal {
+                        return true;
+                    }
+                }
+                ast::Item::Mod { items: inner, .. } => {
+                    if check(inner) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+    check(items)
+}
+
+/// Walk from the source file's directory up to the FS root looking for a
+/// `Cargo.toml`. Returns the first one found, or None. Used by the
+/// build-time diagnostic that points users at the cargo workflow when
+/// they're inside a cargo workspace (crust-ti9).
+fn find_cargo_toml_above(source_file: &str) -> Option<std::path::PathBuf> {
+    let abs = std::fs::canonicalize(source_file).ok()?;
+    let mut dir = abs.parent()?.to_path_buf();
+    loop {
+        let candidate = dir.join("Cargo.toml");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        if !dir.pop() {
+            return None;
+        }
     }
 }
 
@@ -576,6 +680,8 @@ OPTIONS:
     --verify             Attempt to discharge VCs via z3/cvc5 (if on PATH)
     --llm-mode           LLM-safe guardrails: ban unsafe, unwrap, todo!, etc.
     --strict=LEVEL       Strictness 0–4 (default: 0)
+    --extern NAME=PATH   Forward to rustc — link against a precompiled crate
+    -L PATH              Forward to rustc — add a crate-search directory
     -h, --help           Show this message
     -V, --version        Show version
 
