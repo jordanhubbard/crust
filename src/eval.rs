@@ -450,7 +450,7 @@ impl Interpreter {
                 let key = qualify(&def.name);
                 self.enums.insert(key, def);
             }
-            Item::Trait { name, methods } => {
+            Item::Trait { name, methods, .. } => {
                 self.traits.insert(qualify(&name), methods);
             }
             Item::Impl(def) => {

@@ -51,7 +51,7 @@ impl InferredType {
             },
             Ty::Unit => InferredType::Unit,
             Ty::Never => InferredType::Never,
-            Ty::Ref(_, inner) | Ty::Ptr(_, inner) => {
+            Ty::Ref(_, inner) | Ty::Ptr(_, inner) | Ty::RefLt(_, _, inner) => {
                 InferredType::Ref(Box::new(InferredType::from_ast_ty(inner)))
             }
             Ty::Tuple(tys) => {

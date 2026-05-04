@@ -153,6 +153,10 @@ pub enum Pat {
 pub enum Ty {
     Named(String),
     Ref(bool, Box<Ty>),
+    /// `&'lt T` or `&'lt mut T` — reference with an explicit lifetime
+    /// annotation. Codegen emits this faithfully so functions returning
+    /// `&'static str` round-trip without E0106 (crust-1x4).
+    RefLt(bool, String, Box<Ty>),
     Slice(Box<Ty>),
     Tuple(Vec<Ty>),
     Unit,
@@ -201,6 +205,7 @@ pub enum Item {
     Trait {
         name: String,
         methods: Vec<FnDef>,
+        generics: Vec<String>,
     },
     Use(Vec<String>),
     Const {
@@ -250,6 +255,10 @@ pub struct FnDef {
     pub attrs: Vec<Attr>,
     /// Whether the function was declared `async fn`.
     pub is_async: bool,
+    /// Generic parameter *names* captured from `<T, U, …>`. Bounds and
+    /// where-clauses are not yet modelled (crust-1x4) — we just preserve
+    /// the names so codegen can re-emit `<T, U>`.
+    pub generics: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -274,6 +283,9 @@ pub struct StructDef {
     /// Attributes collected from `#[...]` lines preceding the struct.
     /// Used to merge author-supplied derives with Crust's auto-derives.
     pub attrs: Vec<Attr>,
+    /// Generic parameter *names* captured from `<T, U, …>`. Bounds and
+    /// where-clauses are not yet modelled (crust-1x4).
+    pub generics: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -281,6 +293,7 @@ pub struct EnumDef {
     pub name: String,
     pub variants: Vec<EnumVariant>,
     pub attrs: Vec<Attr>,
+    pub generics: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -305,6 +318,13 @@ pub struct ImplDef {
     /// The type is required for codegen to emit a valid `const NAME: T = ...;`
     /// (rustc rejects `_` placeholder types in associated-const positions, E0121).
     pub consts: Vec<(String, Ty, Expr)>,
+    /// Generic parameters from `impl<T, U> …` — the names introduced by the
+    /// impl block itself.
+    pub generics: Vec<String>,
+    /// Generic arguments applied to the implementing type, captured from
+    /// `impl … TypeName<T, U>`. Usually mirrors `generics` for inherent impls
+    /// (`impl<T> Queue<T>`), but the two diverge for partial specialisations.
+    pub type_args: Vec<String>,
 }
 
 pub type Program = Vec<Item>;

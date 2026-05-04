@@ -47,6 +47,18 @@ impl Codegen {
         }
     }
 
+    /// Format the generic-parameter list for an introducing position
+    /// (struct/enum/fn/impl/trait header). At Level <Ship, attach a
+    /// `: Clone` bound so Crust's implicit `.clone()` emission compiles
+    /// against bare type parameters. At Level Ship+, leave bounds alone.
+    fn format_introducing_generics(&self, names: &[String]) -> String {
+        if self.level < StrictnessLevel::Ship {
+            format_generics_with_clone_bound(names)
+        } else {
+            format_generics(names)
+        }
+    }
+
     pub fn emit_program(&mut self, items: &[Item]) -> String {
         let mut out = String::new();
         // Suppress unused-import / unused-variable warnings on the generated file.
@@ -85,8 +97,16 @@ impl Codegen {
             Item::TypeAlias { name, ty } => {
                 format!("type {} = {};\n", name, self.emit_ty(ty))
             }
-            Item::Trait { name, methods } => {
-                let mut out = format!("trait {} {{\n", name);
+            Item::Trait {
+                name,
+                methods,
+                generics,
+            } => {
+                let mut out = format!(
+                    "trait {}{} {{\n",
+                    name,
+                    self.format_introducing_generics(generics)
+                );
                 for m in methods {
                     out.push_str(&format!("    {}", self.emit_fn(m)));
                 }
@@ -127,7 +147,12 @@ impl Codegen {
         out.push_str(&self.emit_type_attrs(&s.attrs));
         let kw = self.pub_kw();
         let field_pub = self.pub_kw();
-        out.push_str(&format!("{}struct {} {{\n", kw, s.name));
+        out.push_str(&format!(
+            "{}struct {}{} {{\n",
+            kw,
+            s.name,
+            self.format_introducing_generics(&s.generics)
+        ));
         for (name, ty) in &s.fields {
             out.push_str(&format!(
                 "    {}{}: {},\n",
@@ -144,7 +169,12 @@ impl Codegen {
         let mut out = String::new();
         out.push_str(&self.emit_type_attrs(&e.attrs));
         let kw = self.pub_kw();
-        out.push_str(&format!("{}enum {} {{\n", kw, e.name));
+        out.push_str(&format!(
+            "{}enum {}{} {{\n",
+            kw,
+            e.name,
+            self.format_introducing_generics(&e.generics)
+        ));
         for v in &e.variants {
             out.push_str("    ");
             out.push_str(&v.name);
@@ -175,10 +205,18 @@ impl Codegen {
 
     fn emit_impl(&mut self, i: &ImplDef) -> String {
         let mut out = String::new();
+        let impl_generics = self.format_introducing_generics(&i.generics);
+        let type_args = format_generics(&i.type_args);
         if let Some(tr) = &i.trait_name {
-            out.push_str(&format!("impl {} for {} {{\n", tr, i.type_name));
+            out.push_str(&format!(
+                "impl{} {} for {}{} {{\n",
+                impl_generics, tr, i.type_name, type_args
+            ));
         } else {
-            out.push_str(&format!("impl {} {{\n", i.type_name));
+            out.push_str(&format!(
+                "impl{} {}{} {{\n",
+                impl_generics, i.type_name, type_args
+            ));
         }
         self.indent += 1;
         for (name, ty, expr) in &i.consts {
@@ -280,7 +318,14 @@ impl Codegen {
             .iter()
             .map(|p| {
                 if p.is_self {
-                    "&self".to_string()
+                    // Distinguish &self / &mut self / self / mut self based on the
+                    // captured `Ty::Ref(mutable, _)` and `mutable` fields.
+                    match (&p.ty, p.mutable) {
+                        (Ty::Ref(true, _), _) => "&mut self".to_string(),
+                        (Ty::Ref(false, _), _) => "&self".to_string(),
+                        (_, true) => "mut self".to_string(),
+                        _ => "self".to_string(),
+                    }
                 } else if p.mutable {
                     format!("mut {}: {}", p.name, self.emit_ty(&p.ty))
                 } else {
@@ -290,16 +335,31 @@ impl Codegen {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let ret = if let Some(ty) = &f.ret_ty {
+        // Lifetime-elision rescue at Level <Ship: if the return type is a
+        // bare `&T` / `&mut T` (no explicit lifetime) and the function has
+        // no input references whose lifetime rustc could elide to, promote
+        // the return to `&'static T`. This handles `fn name(d: Direction)
+        // -> &str { match … }` where the body returns string literals
+        // (genuinely 'static) — fixes E0106 without needing real
+        // lifetime inference (crust-1x4).
+        let ret_ty_promoted = f.ret_ty.as_ref().map(|ty| {
+            if self.level < StrictnessLevel::Ship && needs_static_promotion(ty, &f.params) {
+                promote_to_static(ty)
+            } else {
+                ty.clone()
+            }
+        });
+        let ret = if let Some(ty) = &ret_ty_promoted {
             format!(" -> {}", self.emit_ty(ty))
         } else {
             String::new()
         };
 
         let async_kw = if f.is_async { "async " } else { "" };
+        let fn_generics = self.format_introducing_generics(&f.generics);
         out.push_str(&format!(
-            "{}{}{}fn {}({}){} {{\n",
-            ind, pub_kw, async_kw, f.name, params, ret
+            "{}{}{}fn {}{}({}){} {{\n",
+            ind, pub_kw, async_kw, f.name, fn_generics, params, ret
         ));
         self.indent += 1;
         for stmt in &f.body.stmts {
@@ -367,6 +427,13 @@ impl Codegen {
                     format!("&mut {}", self.emit_ty(inner))
                 } else {
                     format!("&{}", self.emit_ty(inner))
+                }
+            }
+            Ty::RefLt(mutable, lt, inner) => {
+                if *mutable {
+                    format!("&'{} mut {}", lt, self.emit_ty(inner))
+                } else {
+                    format!("&'{} {}", lt, self.emit_ty(inner))
                 }
             }
             Ty::Ptr(mutable, inner) => {
@@ -663,10 +730,17 @@ impl Codegen {
             }
 
             Expr::Match { scrutinee, arms } => {
-                // Loop sentinel
+                // Loop sentinel — `loop` body must be a brace-block in Rust,
+                // so wrap any non-Block body. Without the wrap, a desugared
+                // `while let` produces `loop match …` which rustc rejects.
                 if let [arm] = arms.as_slice() {
                     if matches!(&arm.pat, Pat::Ident(s) if s == "__loop__") {
-                        return format!("loop {}", self.emit_expr(&arm.body));
+                        let body = self.emit_expr(&arm.body);
+                        if matches!(arm.body, Expr::Block(_)) {
+                            return format!("loop {}", body);
+                        } else {
+                            return format!("loop {{ {} }}", body);
+                        }
                     }
                 }
                 let mut out = format!("match {} {{\n", self.emit_expr(scrutinee));
@@ -775,6 +849,55 @@ impl Codegen {
             out.push_str(&format!("    {}\n", self.emit_expr(tail)));
         }
         out
+    }
+}
+
+/// True if a function with this return type and these params needs the
+/// `&'static` promotion at codegen time. Triggers when the return is a bare
+/// `&T` (no lifetime) and there are zero `&` parameters for elision to bind
+/// to.
+fn needs_static_promotion(ret: &Ty, params: &[Param]) -> bool {
+    let bare_ref = matches!(ret, Ty::Ref(_, _));
+    if !bare_ref {
+        return false;
+    }
+    let any_ref_param = params.iter().any(|p| {
+        matches!(p.ty, Ty::Ref(_, _) | Ty::RefLt(_, _, _))
+            || (p.is_self && matches!(p.ty, Ty::Ref(_, _) | Ty::RefLt(_, _, _)))
+    });
+    !any_ref_param
+}
+
+/// Convert `Ty::Ref(mut, T)` → `Ty::RefLt(mut, "static", T)`. Used by the
+/// lifetime-elision rescue above.
+fn promote_to_static(ty: &Ty) -> Ty {
+    match ty {
+        Ty::Ref(mutable, inner) => Ty::RefLt(*mutable, "static".to_string(), inner.clone()),
+        other => other.clone(),
+    }
+}
+
+/// Format a generic-parameter list for codegen: `[]` → `""`,
+/// `["T"]` → `"<T>"`, `["T", "U"]` → `"<T, U>"`.
+fn format_generics(names: &[String]) -> String {
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", names.join(", "))
+    }
+}
+
+/// Same as `format_generics` but with a `: Clone` bound on each parameter.
+/// Used at Level <Ship for type-introducing positions (struct, enum, fn,
+/// impl, trait) so Crust's implicit `.clone()` emission on identifiers
+/// doesn't fail with "method `clone` not found" on bare-generic values.
+/// Type-application positions (e.g. `Queue<T>`) keep the bare-name form.
+fn format_generics_with_clone_bound(names: &[String]) -> String {
+    if names.is_empty() {
+        String::new()
+    } else {
+        let parts: Vec<String> = names.iter().map(|n| format!("{}: Clone", n)).collect();
+        format!("<{}>", parts.join(", "))
     }
 }
 

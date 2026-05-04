@@ -738,7 +738,9 @@ fn is_nonzero_literal(expr: &Expr) -> bool {
 fn is_impl_trait(ty: &Ty) -> bool {
     match ty {
         Ty::Named(s) => s == "impl",
-        Ty::Ref(_, inner) | Ty::Ptr(_, inner) | Ty::Slice(inner) => is_impl_trait(inner),
+        Ty::Ref(_, inner) | Ty::Ptr(_, inner) | Ty::Slice(inner) | Ty::RefLt(_, _, inner) => {
+            is_impl_trait(inner)
+        }
         _ => false,
     }
 }
@@ -749,6 +751,8 @@ fn is_impl_trait(ty: &Ty) -> bool {
 fn lifetime_name(ty: &Ty) -> Option<&str> {
     match ty {
         Ty::Lifetime(name) if name != "_" => Some(name),
+        // `&'static T` etc. are an explicit lifetime; report the lifetime name.
+        Ty::RefLt(_, name, _) if name != "_" && name != "static" => Some(name),
         Ty::Ref(_, inner) | Ty::Ptr(_, inner) | Ty::Slice(inner) => lifetime_name(inner),
         _ => None,
     }

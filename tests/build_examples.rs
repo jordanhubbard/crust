@@ -99,7 +99,6 @@ fn run_and_capture(path: &std::path::Path) -> String {
 /// Each entry is the file name (under examples/) and a short reason.
 /// Remove an entry once the underlying codegen issue is resolved.
 const KNOWN_FAILING: &[(&str, &str)] = &[
-    ("enums.crust", "lifetime elision (crust-1x4)"),
     (
         "iterators.crust",
         "iter() ref/owned mismatch with explicit *deref (crust-ovw)",
@@ -110,15 +109,7 @@ const KNOWN_FAILING: &[(&str, &str)] = &[
     ),
     (
         "patterns.crust",
-        "lifetime elision + refutable let (crust-1x4 / crust-ovw)",
-    ),
-    (
-        "state_machine.crust",
-        "&'static str lifetime elision in fn return (crust-1x4)",
-    ),
-    (
-        "queue_channel.crust",
-        "generic struct method codegen drops type parameter (crust-1x4)",
+        "refutable pattern in let-binding (crust-ovw)",
     ),
 ];
 

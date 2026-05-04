@@ -239,7 +239,7 @@ fn coq_ty(ty: &Ty) -> String {
             other => other.to_string(),
         },
         Ty::Unit | Ty::Never => "unit".into(),
-        Ty::Ref(_, inner) | Ty::Ptr(_, inner) => coq_ty(inner),
+        Ty::Ref(_, inner) | Ty::Ptr(_, inner) | Ty::RefLt(_, _, inner) => coq_ty(inner),
         Ty::Slice(inner) => format!("list {}", coq_ty(inner)),
         Ty::Tuple(tys) => {
             if tys.is_empty() {
@@ -516,7 +516,7 @@ fn lean_ty(ty: &Ty) -> String {
             other => other.to_string(),
         },
         Ty::Unit | Ty::Never => "Unit".into(),
-        Ty::Ref(_, inner) | Ty::Ptr(_, inner) => lean_ty(inner),
+        Ty::Ref(_, inner) | Ty::Ptr(_, inner) | Ty::RefLt(_, _, inner) => lean_ty(inner),
         Ty::Slice(inner) => format!("Array {}", lean_ty(inner)),
         Ty::Tuple(tys) => {
             if tys.is_empty() {

@@ -105,6 +105,56 @@ impl Parser {
         Ok(name)
     }
 
+    /// Parse `<T, U, …>` and return the type-parameter *names*. Lifetime
+    /// parameters (`'a`) and trait bounds (`T: Clone + Send`) are consumed
+    /// but only the bare type-parameter names are returned. crust-1x4 will
+    /// generalise this to a TyParam struct with bounds.
+    fn parse_generic_params(&mut self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        if !self.check(&TokenKind::Lt) {
+            return names;
+        }
+        self.advance(); // consume `<`
+        let mut depth = 1i32;
+        let mut expecting_name = true;
+        while depth > 0 {
+            match self.peek().clone() {
+                TokenKind::Lt => {
+                    depth += 1;
+                    self.advance();
+                }
+                TokenKind::Gt => {
+                    depth -= 1;
+                    self.advance();
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                TokenKind::Shr => {
+                    depth -= 2;
+                    self.advance();
+                    if depth <= 0 {
+                        break;
+                    }
+                }
+                TokenKind::Comma => {
+                    self.advance();
+                    expecting_name = true;
+                }
+                TokenKind::Ident(s) if expecting_name && depth == 1 => {
+                    self.advance();
+                    names.push(s);
+                    expecting_name = false;
+                }
+                TokenKind::Eof => break,
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+        names
+    }
+
     // Skip generic parameters <T, U, ...> including lifetime params
     fn skip_generics(&mut self) {
         if !self.check(&TokenKind::Lt) {
@@ -294,7 +344,7 @@ impl Parser {
 
     fn parse_fn_def(&mut self) -> Result<FnDef> {
         let name = self.expect_ident()?;
-        self.skip_generics();
+        let generics = self.parse_generic_params();
         self.expect(&TokenKind::LParen)?;
         let params = self.parse_params()?;
         self.expect(&TokenKind::RParen)?;
@@ -306,6 +356,7 @@ impl Parser {
         self.skip_where();
         let body = self.parse_block()?;
         Ok(FnDef {
+            generics,
             name,
             params,
             ret_ty,
@@ -322,14 +373,14 @@ impl Parser {
             let mutable = self.eat(&TokenKind::Mut);
             if self.check(&TokenKind::And) {
                 self.advance();
-                let _ = self.eat(&TokenKind::Mut);
+                let ref_mut = self.eat(&TokenKind::Mut);
                 if self.check(&TokenKind::SelfKw) {
                     self.advance();
                     params.push(Param {
                         name: "self".into(),
-                        ty: Ty::Ref(false, Box::new(Ty::Named("Self".into()))),
+                        ty: Ty::Ref(ref_mut, Box::new(Ty::Named("Self".into()))),
                         is_self: true,
-                        mutable: false,
+                        mutable: ref_mut,
                     });
                 } else {
                     // &Type param
@@ -387,7 +438,7 @@ impl Parser {
 
     fn parse_struct(&mut self) -> Result<StructDef> {
         let name = self.expect_ident()?;
-        self.skip_generics();
+        let generics = self.parse_generic_params();
         self.skip_where();
         if self.eat(&TokenKind::LParen) {
             // Tuple struct: struct Foo(T1, T2);
@@ -408,6 +459,7 @@ impl Parser {
                 name,
                 fields,
                 attrs: Vec::new(),
+                generics,
             });
         }
         // Unit struct: struct Foo;
@@ -416,6 +468,7 @@ impl Parser {
                 name,
                 fields: Vec::new(),
                 attrs: Vec::new(),
+                generics,
             });
         }
         self.expect(&TokenKind::LBrace)?;
@@ -435,12 +488,13 @@ impl Parser {
             name,
             fields,
             attrs: Vec::new(),
+            generics,
         })
     }
 
     fn parse_enum(&mut self) -> Result<EnumDef> {
         let name = self.expect_ident()?;
-        self.skip_generics();
+        let generics = self.parse_generic_params();
         self.skip_where();
         self.expect(&TokenKind::LBrace)?;
         let mut variants = Vec::new();
@@ -490,20 +544,22 @@ impl Parser {
             name,
             variants,
             attrs: Vec::new(),
+            generics,
         })
     }
 
     fn parse_impl(&mut self) -> Result<ImplDef> {
-        self.skip_generics();
-        // impl [Trait for] Type — trait may be a qualified path like std::fmt::Display
+        // `impl<T, U>` introduces names; `impl Foo<T>` and `impl Trait<T> for Bar<T>`
+        // apply names to the implementing type. Capture both for codegen.
+        let generics = self.parse_generic_params();
         let first = self.expect_path_tail()?;
-        self.skip_generics(); // skip <T> after type name
-        let (type_name, trait_name) = if self.eat(&TokenKind::For) {
+        let first_args = self.parse_generic_params();
+        let (type_name, trait_name, type_args) = if self.eat(&TokenKind::For) {
             let ty = self.expect_path_tail()?;
-            self.skip_generics(); // skip <T> after implementing type name
-            (ty, Some(first))
+            let impl_args = self.parse_generic_params();
+            (ty, Some(first), impl_args)
         } else {
-            (first, None)
+            (first, None, first_args)
         };
         self.skip_where();
         self.expect(&TokenKind::LBrace)?;
@@ -553,12 +609,14 @@ impl Parser {
             trait_name,
             methods,
             consts,
+            generics,
+            type_args,
         })
     }
 
     fn parse_trait(&mut self) -> Result<Item> {
         let name = self.expect_ident()?;
-        self.skip_generics();
+        let generics = self.parse_generic_params();
         // optional supertrait bounds: trait Foo: Bar + Baz
         if self.eat(&TokenKind::Colon) {
             while !self.check(&TokenKind::LBrace) && !self.check(&TokenKind::Eof) {
@@ -575,7 +633,7 @@ impl Parser {
             if self.check(&TokenKind::Fn) {
                 self.advance();
                 let fn_name = self.expect_ident()?;
-                self.skip_generics();
+                let fn_generics = self.parse_generic_params();
                 self.expect(&TokenKind::LParen)?;
                 let params = self.parse_params()?;
                 self.expect(&TokenKind::RParen)?;
@@ -595,6 +653,7 @@ impl Parser {
                         body,
                         attrs,
                         is_async,
+                        generics: fn_generics,
                     });
                 } else {
                     // required method (no body) — skip the semicolon
@@ -613,7 +672,11 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace)?;
-        Ok(Item::Trait { name, methods })
+        Ok(Item::Trait {
+            name,
+            methods,
+            generics,
+        })
     }
 
     fn parse_use(&mut self) -> Result<Vec<String>> {
@@ -701,15 +764,24 @@ impl Parser {
                 Ok(Ty::Never)
             }
             TokenKind::And | TokenKind::AndAnd => {
-                // `&&T` or `&T` — both become a single ref at Level 0
+                // `&&T` or `&T` — both become a single ref at Level 0.
+                // Capture the lifetime annotation if present so codegen can
+                // re-emit it; without this the elided form `&str` would
+                // hit E0106 on bare returns (crust-1x4).
                 self.advance();
-                // skip lifetime annotation like `'a`
-                if matches!(self.peek(), TokenKind::Label(_)) {
+                let lifetime = if let TokenKind::Label(name) = self.peek().clone() {
                     self.advance();
-                }
+                    Some(name)
+                } else {
+                    None
+                };
                 let mutable = self.eat(&TokenKind::Mut);
                 let inner = self.parse_ty()?;
-                Ok(Ty::Ref(mutable, Box::new(inner)))
+                if let Some(lt) = lifetime {
+                    Ok(Ty::RefLt(mutable, lt, Box::new(inner)))
+                } else {
+                    Ok(Ty::Ref(mutable, Box::new(inner)))
+                }
             }
             TokenKind::Star => {
                 self.advance();
