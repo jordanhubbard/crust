@@ -551,6 +551,18 @@ pub fn call_builtin(name: &str, args: Vec<Value>, interp: &mut Interpreter) -> O
         "std::i8::MIN" | "i8::MIN" => Some(Ok(Value::Int(-128))),
         "std::usize::MAX" | "usize::MAX" => Some(Ok(Value::Int(i64::MAX))),
         "std::usize::MIN" | "usize::MIN" => Some(Ok(Value::Int(0))),
+        "std::isize::MAX" | "isize::MAX" => Some(Ok(Value::Int(i64::MAX))),
+        "std::isize::MIN" | "isize::MIN" => Some(Ok(Value::Int(i64::MIN))),
+        "std::u16::MAX" | "u16::MAX" => Some(Ok(Value::Int(u16::MAX as i64))),
+        "std::u16::MIN" | "u16::MIN" => Some(Ok(Value::Int(0))),
+        "std::i16::MAX" | "i16::MAX" => Some(Ok(Value::Int(i16::MAX as i64))),
+        "std::i16::MIN" | "i16::MIN" => Some(Ok(Value::Int(i16::MIN as i64))),
+        // i128 / u128 don't fit in Crust's i64 model. Approximate with the
+        // i64 boundary; see crust-6yj for the full primitive-width rework.
+        "std::u128::MAX" | "u128::MAX" => Some(Ok(Value::Int(i64::MAX))),
+        "std::u128::MIN" | "u128::MIN" => Some(Ok(Value::Int(0))),
+        "std::i128::MAX" | "i128::MAX" => Some(Ok(Value::Int(i64::MAX))),
+        "std::i128::MIN" | "i128::MIN" => Some(Ok(Value::Int(i64::MIN))),
 
         // Radix parsing: i64::from_str_radix("ff", 16) -> Ok(255)
         "i64::from_str_radix"

@@ -267,6 +267,51 @@ impl Analyzer {
         // 4. Concurrency primitives in expression position (Arc::new, Rc::new,
         //    Mutex::new, thread::spawn, mpsc::channel, …). crust-570.
         self.collect_concurrency_paths(&f.body, &f.name, out);
+
+        // 5. Width-sensitive integer methods (wrapping_add, checked_*,
+        //    saturating_*, overflowing_*). Crust collapses every integer
+        //    type to i64 in the interpreter, so these methods do not honour
+        //    the original width — `u8::MAX.wrapping_add(1)` returns 256, not
+        //    0 (crust-6yj).
+        self.collect_width_sensitive_methods(&f.body, &f.name, out);
+    }
+
+    fn collect_width_sensitive_methods(
+        &self,
+        block: &Block,
+        fn_name: &str,
+        out: &mut Vec<Diagnostic>,
+    ) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Semi(e) | Stmt::Expr(e) => self.width_method_in_expr(e, fn_name, out),
+                Stmt::Let { init: Some(e), .. } => self.width_method_in_expr(e, fn_name, out),
+                _ => {}
+            }
+        }
+        if let Some(tail) = &block.tail {
+            self.width_method_in_expr(tail, fn_name, out);
+        }
+    }
+
+    fn width_method_in_expr(&self, expr: &Expr, fn_name: &str, out: &mut Vec<Diagnostic>) {
+        if let Expr::MethodCall { method, .. } = expr {
+            if is_width_sensitive_method(method) {
+                out.push(Diagnostic::warning(
+                    DiagnosticKind::UnsupportedFeature,
+                    fn_name,
+                    format!(
+                        "`.{}()` is not faithfully modelled — Crust's interpreter \
+                         collapses every integer type to i64, so width-specific \
+                         wrap/overflow/saturation behaviour does not apply (crust-6yj). \
+                         `crust build` passes the call through to rustc, which \
+                         produces correct results",
+                        method
+                    ),
+                ));
+            }
+        }
+        recurse_expr(expr, |e| self.width_method_in_expr(e, fn_name, out));
     }
 
     fn collect_concurrency_paths(&self, block: &Block, fn_name: &str, out: &mut Vec<Diagnostic>) {
@@ -745,6 +790,47 @@ fn unsupported_concurrency_segment(parts: &[String]) -> Option<&'static str> {
         return Some("RwLock");
     }
     None
+}
+
+/// Width-sensitive integer methods. These return semantically-different
+/// results for a `u8` versus an `i64`; Crust's interpreter cannot model that
+/// without a real primitive-width Value (crust-6yj), so we surface a
+/// warning instead of silently producing the wrong number.
+fn is_width_sensitive_method(name: &str) -> bool {
+    matches!(
+        name,
+        "wrapping_add"
+            | "wrapping_sub"
+            | "wrapping_mul"
+            | "wrapping_div"
+            | "wrapping_rem"
+            | "wrapping_neg"
+            | "wrapping_shl"
+            | "wrapping_shr"
+            | "checked_add"
+            | "checked_sub"
+            | "checked_mul"
+            | "checked_div"
+            | "checked_rem"
+            | "checked_neg"
+            | "saturating_add"
+            | "saturating_sub"
+            | "saturating_mul"
+            | "saturating_pow"
+            | "overflowing_add"
+            | "overflowing_sub"
+            | "overflowing_mul"
+            | "overflowing_neg"
+            | "leading_zeros"
+            | "trailing_zeros"
+            | "count_ones"
+            | "count_zeros"
+            | "swap_bytes"
+            | "to_be"
+            | "to_le"
+            | "from_be"
+            | "from_le"
+    )
 }
 
 fn is_known_macro(name: &str) -> bool {
