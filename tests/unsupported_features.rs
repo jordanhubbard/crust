@@ -117,6 +117,72 @@ fn known_macros_do_not_warn() {
 }
 
 #[test]
+fn concurrency_imports_warn_at_develop() {
+    ensure_built();
+    let src = write_temp(
+        "conc_use",
+        "use std::sync::Arc;\nuse std::thread;\nfn main() {}\n",
+    );
+    let (_ok, stderr) = run_build(&src, "1");
+    let _ = std::fs::remove_file(&src);
+    assert!(
+        stderr.contains("Arc") && stderr.contains("crust-570"),
+        "expected Arc warning referencing crust-570, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("std::thread"),
+        "expected std::thread warning, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn concurrency_path_calls_warn_at_develop() {
+    ensure_built();
+    let src = write_temp("conc_path", "fn main() { let _ = Arc::new(42); }\n");
+    let (_ok, stderr) = run_build(&src, "1");
+    let _ = std::fs::remove_file(&src);
+    assert!(
+        stderr.contains("Arc") && stderr.contains("crust-570"),
+        "expected Arc warning at call site, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn concurrency_errors_at_prove() {
+    ensure_built();
+    let src = write_temp("conc_prove", "use std::sync::Mutex;\nfn main() {}\n");
+    let (ok, stderr) = run_build(&src, "4");
+    let _ = std::fs::remove_file(&src);
+    assert!(!ok, "Mutex import should fail at --strict=4");
+    assert!(
+        stderr.contains("Mutex") && stderr.contains("error"),
+        "expected Mutex error at --strict=4, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn safe_collections_do_not_trigger_concurrency_warning() {
+    ensure_built();
+    // HashMap, Vec, RefCell, Cell are used internally and must not be
+    // flagged as concurrency-unsupported.
+    let src = write_temp(
+        "safe",
+        "use std::collections::HashMap;\nfn main() { let _ = HashMap::new(); }\n",
+    );
+    let (_ok, stderr) = run_build(&src, "1");
+    let _ = std::fs::remove_file(&src);
+    assert!(
+        !stderr.contains("crust-570"),
+        "HashMap must not trigger concurrency diagnostic, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
 fn explore_level_emits_no_unsupported_diagnostics() {
     ensure_built();
     // At Level 0 (Explore) we want a chatty, friendly UX — no warnings about

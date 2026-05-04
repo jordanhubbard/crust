@@ -112,6 +112,30 @@ impl Analyzer {
                 Item::Mod { items: inner, .. } => {
                     diags.extend(self.analyze_program(inner));
                 }
+                // Flag concurrency imports so callers get a clear "not yet
+                // supported" message at parse time rather than a confusing
+                // runtime "no method clone on type Arc" later (crust-570).
+                Item::Use(path) => {
+                    if self.level >= StrictnessLevel::Develop {
+                        if let Some(name) = unsupported_concurrency_segment(path) {
+                            let mut d = Diagnostic::warning(
+                                DiagnosticKind::UnsupportedFeature,
+                                "",
+                                format!(
+                                    "`{}` is not implemented by Crust's interpreter; \
+                                     `crust run` will fail at first use, and `crust build` \
+                                     will pass it through to rustc verbatim. \
+                                     Single-threaded shim semantics are tracked in crust-570",
+                                    name
+                                ),
+                            );
+                            if self.level >= StrictnessLevel::Prove {
+                                d.error = true;
+                            }
+                            diags.push(d);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -239,6 +263,42 @@ impl Analyzer {
         //    set runs as a no-op at `crust run` and is passed through verbatim
         //    to rustc, which may or may not have the macro available.
         self.collect_unknown_macros(&f.body, &f.name, out);
+
+        // 4. Concurrency primitives in expression position (Arc::new, Rc::new,
+        //    Mutex::new, thread::spawn, mpsc::channel, …). crust-570.
+        self.collect_concurrency_paths(&f.body, &f.name, out);
+    }
+
+    fn collect_concurrency_paths(&self, block: &Block, fn_name: &str, out: &mut Vec<Diagnostic>) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Semi(e) | Stmt::Expr(e) => self.concurrency_in_expr(e, fn_name, out),
+                Stmt::Let { init: Some(e), .. } => self.concurrency_in_expr(e, fn_name, out),
+                _ => {}
+            }
+        }
+        if let Some(tail) = &block.tail {
+            self.concurrency_in_expr(tail, fn_name, out);
+        }
+    }
+
+    fn concurrency_in_expr(&self, expr: &Expr, fn_name: &str, out: &mut Vec<Diagnostic>) {
+        if let Expr::Path(parts) = expr {
+            if let Some(name) = unsupported_concurrency_segment(parts) {
+                out.push(Diagnostic::warning(
+                    DiagnosticKind::UnsupportedFeature,
+                    fn_name,
+                    format!(
+                        "`{}` is not implemented by Crust's interpreter (crust-570). \
+                         Single-threaded shims and a real diagnostic for `crust run` \
+                         are tracked under that bead; `crust build` passes the symbol \
+                         through to rustc verbatim",
+                        name
+                    ),
+                ));
+            }
+        }
+        recurse_expr(expr, |e| self.concurrency_in_expr(e, fn_name, out));
     }
 
     fn collect_unknown_macros(&self, block: &Block, fn_name: &str, out: &mut Vec<Diagnostic>) {
@@ -654,6 +714,39 @@ fn lifetime_name(ty: &Ty) -> Option<&str> {
 /// passed verbatim to rustc by codegen — fine if it's a real Rust stdlib
 /// macro, surprising if the user expected Crust to evaluate it. Keep in sync
 /// with `Interpreter::eval_macro` in eval.rs.
+/// If `parts` references an std::sync / std::thread / Arc / Rc / Mutex / RwLock
+/// / channel / atomic path that Crust's interpreter does not implement, return
+/// the user-facing display name. Returns `None` for paths Crust either handles
+/// (HashMap, RefCell, Cell — used internally) or that aren't concurrency-flagged.
+fn unsupported_concurrency_segment(parts: &[String]) -> Option<&'static str> {
+    let segments: Vec<&str> = parts.iter().map(|s| s.as_str()).collect();
+    let head = segments.first().copied().unwrap_or("");
+    let last = segments.last().copied().unwrap_or("");
+    let any_seg = |needle: &str| segments.contains(&needle);
+    if any_seg("thread") && (head == "std" || head == "thread") {
+        return Some("std::thread");
+    }
+    if any_seg("mpsc") {
+        return Some("std::sync::mpsc");
+    }
+    if any_seg("atomic") || last.starts_with("Atomic") {
+        return Some("std::sync::atomic");
+    }
+    if last == "Arc" || any_seg("Arc") {
+        return Some("Arc");
+    }
+    if last == "Rc" || any_seg("Rc") {
+        return Some("Rc");
+    }
+    if last == "Mutex" || any_seg("Mutex") {
+        return Some("Mutex");
+    }
+    if last == "RwLock" || any_seg("RwLock") {
+        return Some("RwLock");
+    }
+    None
+}
+
 fn is_known_macro(name: &str) -> bool {
     matches!(
         name,
