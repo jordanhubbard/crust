@@ -570,3 +570,117 @@ fn run_z3(script: &str) -> Option<String> {
     let output = child.wait_with_output().ok()?;
     String::from_utf8(output.stdout).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+
+    fn parse_program(src: &str) -> Vec<Item> {
+        let tokens = Lexer::new(src).tokenize().expect("tokenize");
+        Parser::new(tokens).parse_program().expect("parse")
+    }
+
+    #[test]
+    fn extract_vcs_picks_up_requires_and_ensures() {
+        let prog = parse_program(
+            "#[requires(x > 0)]\n#[ensures(result > 0)]\nfn id(x: i64) -> i64 { x }\nfn main() {}",
+        );
+        let vcs = ContractChecker::extract_vcs(&prog);
+        // 2 VCs for `id`, 0 for `main`.
+        assert_eq!(vcs.len(), 2);
+        assert!(vcs.iter().all(|v| v.fn_name == "id"));
+        let kinds: Vec<_> = vcs.iter().map(|v| v.kind_str()).collect();
+        assert!(kinds.contains(&"requires"));
+        assert!(kinds.contains(&"ensures"));
+    }
+
+    #[test]
+    fn extract_vcs_recurses_into_modules() {
+        let prog =
+            parse_program("mod m { #[requires(x > 0)] fn f(x: i64) -> i64 { x } } fn main() {}");
+        let vcs = ContractChecker::extract_vcs(&prog);
+        assert_eq!(vcs.len(), 1);
+    }
+
+    #[test]
+    fn extract_vcs_handles_invariants() {
+        let prog = parse_program("#[invariant(x != 0)] fn f(x: i64) { } fn main() {}");
+        let vcs = ContractChecker::extract_vcs(&prog);
+        assert_eq!(vcs.len(), 1);
+        assert_eq!(vcs[0].kind_str(), "invariant");
+    }
+
+    #[test]
+    fn pretty_predicate_round_trips_simple_expressions() {
+        let prog = parse_program("#[requires(x + 1 == 2)] fn f(x: i64) {} fn main() {}");
+        let vcs = ContractChecker::extract_vcs(&prog);
+        // The pretty form uses Rust syntax, not Debug-AST.
+        assert!(vcs[0].expr.contains("+"));
+        assert!(vcs[0].expr.contains("=="));
+    }
+
+    #[test]
+    fn smt_encoding_uses_typed_sorts() {
+        let prog = parse_program("#[requires(flag)] fn f(flag: bool) -> i64 { 0 } fn main() {}");
+        let vcs = ContractChecker::extract_vcs(&prog);
+        // bool param must declare as Bool, not Int.
+        assert!(vcs[0].smtlib.contains("Bool"));
+    }
+
+    #[test]
+    fn smt_encoding_uses_int_for_integer_types() {
+        let prog = parse_program("#[requires(x > 0)] fn f(x: u32) -> i64 { 0 } fn main() {}");
+        let vcs = ContractChecker::extract_vcs(&prog);
+        assert!(vcs[0].smtlib.contains("Int"));
+    }
+
+    #[test]
+    fn extract_counterexample_parses_define_fun_lines() {
+        let model = "(\n  (define-fun x () Int\n    5)\n  (define-fun result () Int\n    10)\n)";
+        let cx = extract_counterexample(model);
+        assert!(cx.contains("x=5"));
+        assert!(cx.contains("result=10"));
+    }
+
+    #[test]
+    fn extract_counterexample_handles_negative_values() {
+        let model = "(\n  (define-fun x () Int\n    (- 7))\n)";
+        let cx = extract_counterexample(model);
+        assert!(cx.contains("x=-7"));
+    }
+
+    #[test]
+    fn extract_counterexample_skips_internal_names() {
+        let model = "(\n  (define-fun !aux () Int 5)\n  (define-fun x () Int 1)\n)";
+        let cx = extract_counterexample(model);
+        assert!(!cx.contains("!aux"));
+        assert!(cx.contains("x=1"));
+    }
+
+    #[test]
+    fn smt_sort_classification() {
+        assert_eq!(smt_sort_of_ty(&Ty::Named("i64".into())).name, "Int");
+        assert_eq!(smt_sort_of_ty(&Ty::Named("u8".into())).name, "Int");
+        assert_eq!(smt_sort_of_ty(&Ty::Named("f64".into())).name, "Real");
+        assert_eq!(smt_sort_of_ty(&Ty::Named("bool".into())).name, "Bool");
+        // Unknown types fall back to Int with a marker.
+        let s = smt_sort_of_ty(&Ty::Named("MyStruct".into()));
+        assert_eq!(s.name, "Int");
+        assert!(s.fallback_note);
+    }
+
+    #[test]
+    fn pretty_predicate_unparseable_yields_placeholder() {
+        // Construct a complex expression directly through pretty_expr.
+        let e = Expr::MethodCall {
+            receiver: Box::new(Expr::Ident("v".into())),
+            method: "len".into(),
+            turbofish: None,
+            args: vec![],
+        };
+        let s = pretty_predicate(&e);
+        assert!(s.contains("v.len()"));
+    }
+}

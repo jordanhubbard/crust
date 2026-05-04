@@ -61,3 +61,56 @@ impl std::fmt::Display for StrictnessLevel {
         write!(f, "{} ({})", self.as_u8(), self.name())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_u8_round_trips_for_all_levels() {
+        for n in 0..=4u8 {
+            let level = StrictnessLevel::from_u8(n);
+            assert_eq!(level.as_u8(), n);
+        }
+    }
+
+    #[test]
+    fn from_u8_above_4_falls_back_to_explore() {
+        assert_eq!(StrictnessLevel::from_u8(99), StrictnessLevel::Explore);
+    }
+
+    #[test]
+    fn names_match_dial_labels() {
+        assert_eq!(StrictnessLevel::Explore.name(), "Explore");
+        assert_eq!(StrictnessLevel::Develop.name(), "Develop");
+        assert_eq!(StrictnessLevel::Harden.name(), "Harden");
+        assert_eq!(StrictnessLevel::Ship.name(), "Ship");
+        assert_eq!(StrictnessLevel::Prove.name(), "Prove");
+    }
+
+    #[test]
+    fn display_formats_number_and_name() {
+        assert_eq!(StrictnessLevel::Explore.to_string(), "0 (Explore)");
+        assert_eq!(StrictnessLevel::Prove.to_string(), "4 (Prove)");
+    }
+
+    #[test]
+    fn ordering_is_monotonic() {
+        assert!(StrictnessLevel::Explore < StrictnessLevel::Develop);
+        assert!(StrictnessLevel::Develop < StrictnessLevel::Harden);
+        assert!(StrictnessLevel::Harden < StrictnessLevel::Ship);
+        assert!(StrictnessLevel::Ship < StrictnessLevel::Prove);
+    }
+
+    #[test]
+    fn description_is_non_empty_for_every_level() {
+        for n in 0..=4u8 {
+            assert!(!StrictnessLevel::from_u8(n).description().is_empty());
+        }
+    }
+
+    #[test]
+    fn default_is_explore() {
+        assert_eq!(StrictnessLevel::default(), StrictnessLevel::Explore);
+    }
+}

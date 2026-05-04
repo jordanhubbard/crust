@@ -1228,3 +1228,221 @@ fn emit_pat(pat: &Pat) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+
+    fn parse_and_emit(src: &str) -> String {
+        let tokens = Lexer::new(src).tokenize().expect("tokenize");
+        let prog = Parser::new(tokens).parse_program().expect("parse");
+        Codegen::new().emit_program(&prog)
+    }
+
+    fn emit_at(level: StrictnessLevel, src: &str) -> String {
+        let tokens = Lexer::new(src).tokenize().expect("tokenize");
+        let prog = Parser::new(tokens).parse_program().expect("parse");
+        Codegen::with_level(level).emit_program(&prog)
+    }
+
+    #[test]
+    fn emits_struct_with_generic_param_and_clone_bound_at_explore() {
+        let out = parse_and_emit("struct Box<T> { v: T }");
+        assert!(out.contains("struct Box<T: Clone>"));
+        assert!(out.contains("v: T"));
+    }
+
+    #[test]
+    fn ship_drops_clone_bound_and_auto_derive() {
+        let out = emit_at(StrictnessLevel::Ship, "struct Box<T> { v: T }");
+        assert!(out.contains("struct Box<T>"));
+        assert!(!out.contains("Clone, Debug, PartialEq"));
+    }
+
+    #[test]
+    fn impl_with_generics_emits_both_brackets() {
+        let out = parse_and_emit("impl<T> Foo<T> { fn new() -> Foo<T> { Foo {} } }");
+        assert!(out.contains("impl<T: Clone> Foo<T>"));
+    }
+
+    #[test]
+    fn impl_const_emits_typed_signature() {
+        let out = parse_and_emit("struct Foo; impl Foo { const N: i64 = 42; }");
+        assert!(out.contains("const N: i64 = 42;"));
+    }
+
+    #[test]
+    fn fn_pointer_type_round_trips() {
+        let out = parse_and_emit("fn apply(f: fn(i64) -> i64, x: i64) -> i64 { f(x) }");
+        assert!(out.contains("f: fn(i64) -> i64"));
+    }
+
+    #[test]
+    fn fn_trait_round_trips() {
+        let out = parse_and_emit("fn apply(f: Fn(i64) -> i64) {}");
+        assert!(out.contains("f: Fn(i64) -> i64"));
+    }
+
+    #[test]
+    fn ref_with_lifetime_round_trips() {
+        let out = parse_and_emit("fn name(s: &'static str) -> &'static str { s }");
+        assert!(out.contains("&'static str"));
+    }
+
+    #[test]
+    fn bare_ref_return_with_no_input_refs_promotes_to_static() {
+        let out = parse_and_emit("fn give() -> &str { \"hi\" }");
+        assert!(out.contains("&'static str"));
+    }
+
+    #[test]
+    fn ref_return_with_input_ref_does_not_promote() {
+        let out = parse_and_emit("fn first(xs: &Vec<i64>) -> &i64 { xs.first().unwrap() }");
+        assert!(!out.contains("&'static i64"));
+    }
+
+    #[test]
+    fn mut_self_emits_correctly() {
+        let out = parse_and_emit("struct C; impl C { fn bump(&mut self) -> i64 { 1 } }");
+        assert!(out.contains("&mut self"));
+    }
+
+    #[test]
+    fn iter_chain_injects_cloned_at_explore() {
+        let out = parse_and_emit(
+            "fn main() { let v = vec![1, 2]; let _: Vec<i64> = v.iter().map(|x| x).collect(); }",
+        );
+        assert!(out.contains(".iter().cloned()"));
+    }
+
+    #[test]
+    fn iter_chain_no_cloned_at_ship() {
+        let out = emit_at(
+            StrictnessLevel::Ship,
+            "fn main() { let v = vec![1]; let _ = v.iter(); }",
+        );
+        assert!(!out.contains(".cloned()"));
+    }
+
+    #[test]
+    fn turbofish_round_trips() {
+        let out = parse_and_emit("fn main() { let _: i64 = vec![1].iter().sum::<i64>(); }");
+        assert!(out.contains("sum::<i64>"));
+    }
+
+    #[test]
+    fn range_in_method_receiver_is_parenthesised() {
+        let out = parse_and_emit("fn main() { let _: i64 = (1..=10).sum(); }");
+        assert!(out.contains("(1..=10).sum()"));
+    }
+
+    #[test]
+    fn refutable_let_pattern_gets_else_unreachable() {
+        let out = parse_and_emit(
+            "fn main() { let xs = vec![1, 2, 3]; let [a, .., z] = xs.as_slice() else { return; }; }",
+        );
+        // The user's else block survives.
+        assert!(out.contains("else"));
+    }
+
+    #[test]
+    fn refutable_let_without_else_gets_synthesised() {
+        let out = parse_and_emit("fn main() { let xs = vec![1, 2]; let [a, b] = xs.as_slice(); }");
+        assert!(out.contains("else { unreachable!() }"));
+    }
+
+    #[test]
+    fn user_supplied_derives_merge_with_auto() {
+        let out = parse_and_emit("#[derive(Hash)] struct Foo { x: i64 }");
+        // Author Hash gets merged with Clone, Debug, PartialEq.
+        assert!(out.contains("Hash"));
+        assert!(out.contains("Clone"));
+    }
+
+    #[test]
+    fn inline_mod_pub_promotes_at_explore() {
+        let out = parse_and_emit("mod m { fn h() -> i64 { 1 } } fn main() {}");
+        assert!(out.contains("pub fn h"));
+    }
+
+    #[test]
+    fn macro_call_round_trips() {
+        let out = parse_and_emit("fn main() { println!(\"hi\"); }");
+        assert!(out.contains("println!"));
+    }
+
+    #[test]
+    fn allow_unused_header_present() {
+        let out = parse_and_emit("fn main() {}");
+        assert!(out.starts_with("#![allow"));
+    }
+
+    #[test]
+    fn enum_with_variants_and_generics() {
+        let out = parse_and_emit("enum Maybe<T> { Yes(T), No }");
+        assert!(out.contains("enum Maybe<T: Clone>"));
+        assert!(out.contains("Yes(T),"));
+        assert!(out.contains("No,"));
+    }
+
+    #[test]
+    fn trait_with_default_method() {
+        let out = parse_and_emit("trait Greet { fn hi() -> i64 { 1 } }");
+        assert!(out.contains("trait Greet"));
+        assert!(out.contains("fn hi()"));
+    }
+
+    #[test]
+    fn nested_module_emits_nested() {
+        let out = parse_and_emit("mod outer { mod inner { fn f() {} } }");
+        assert!(out.contains("mod outer"));
+        assert!(out.contains("mod inner"));
+    }
+
+    #[test]
+    fn pat_is_refutable_on_common_patterns() {
+        // Smoke-test the helper used for let-else synthesis.
+        assert!(!pat_is_refutable(&Pat::Wild));
+        assert!(!pat_is_refutable(&Pat::Ident("x".into())));
+        assert!(pat_is_refutable(&Pat::Lit(Lit::Int(5))));
+        assert!(pat_is_refutable(&Pat::Tuple(vec![
+            Pat::Ident("a".into()),
+            Pat::Lit(Lit::Int(1)),
+        ])));
+    }
+
+    #[test]
+    fn chain_starts_with_iter_detects_root() {
+        let tokens = Lexer::new("fn main() { let _ = vec![1].iter().map(|x| x); }")
+            .tokenize()
+            .unwrap();
+        let prog = Parser::new(tokens).parse_program().unwrap();
+        // Walk to find the .map() call and check its receiver.
+        if let Item::Fn(f) = &prog[0] {
+            for stmt in &f.body.stmts {
+                if let Stmt::Let {
+                    init: Some(Expr::MethodCall { receiver, .. }),
+                    ..
+                } = stmt
+                {
+                    assert!(chain_starts_with_iter(receiver));
+                    return;
+                }
+            }
+        }
+        panic!("did not find expected method call");
+    }
+
+    #[test]
+    fn iter_method_takes_owned_classifies_correctly() {
+        assert!(iter_method_takes_owned("map"));
+        assert!(iter_method_takes_owned("fold"));
+        assert!(iter_method_takes_owned("any"));
+        assert!(iter_method_takes_owned("all"));
+        assert!(!iter_method_takes_owned("filter"));
+        assert!(!iter_method_takes_owned("find"));
+        assert!(!iter_method_takes_owned("max_by_key"));
+    }
+}

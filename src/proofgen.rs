@@ -585,3 +585,129 @@ fn pretty_lean_expr(expr: &Expr) -> String {
         _ => "True".into(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+
+    fn parse(src: &str) -> Vec<Item> {
+        let tokens = Lexer::new(src).tokenize().unwrap();
+        Parser::new(tokens).parse_program().unwrap()
+    }
+
+    #[test]
+    fn coq_emits_struct_as_record() {
+        let prog = parse("struct Point { x: i64, y: i64 } fn main() {}");
+        let coq = CoqEmitter::emit_program(&prog, &[]);
+        assert!(coq.contains("Record Point"));
+        assert!(coq.contains("x : Z"));
+        assert!(coq.contains("y : Z"));
+    }
+
+    #[test]
+    fn coq_emits_enum_as_inductive() {
+        let prog = parse("enum Color { Red, Green, Blue } fn main() {}");
+        let coq = CoqEmitter::emit_program(&prog, &[]);
+        assert!(coq.contains("Inductive Color"));
+        assert!(coq.contains("| Red"));
+        assert!(coq.contains("| Green"));
+    }
+
+    #[test]
+    fn coq_emits_function_as_uninterpreted_parameter() {
+        let prog = parse("fn id(x: i64) -> i64 { x } fn main() {}");
+        let coq = CoqEmitter::emit_program(&prog, &[]);
+        // Even without contracts, the fn name shows up as a Parameter
+        // so later theorems can refer to it.
+        assert!(coq.contains("Parameter id"));
+    }
+
+    #[test]
+    fn coq_emits_contract_theorem() {
+        let prog = parse(
+            "#[requires(x > 0)] #[ensures(result == x)] fn id(x: i64) -> i64 { x } fn main() {}",
+        );
+        let coq = CoqEmitter::emit_program(&prog, &[]);
+        assert!(coq.contains("Theorem id_contract"));
+        assert!(coq.contains("Admitted."));
+    }
+
+    #[test]
+    fn lean_emits_struct_as_structure() {
+        let prog = parse("struct Pair { a: i64, b: i64 } fn main() {}");
+        let lean = LeanEmitter::emit_program(&prog, &[]);
+        assert!(lean.contains("structure Pair"));
+        assert!(lean.contains("a : Int"));
+    }
+
+    #[test]
+    fn lean_emits_enum_as_inductive() {
+        let prog = parse("enum Side { Left, Right } fn main() {}");
+        let lean = LeanEmitter::emit_program(&prog, &[]);
+        assert!(lean.contains("inductive Side"));
+        assert!(lean.contains("| Left"));
+    }
+
+    #[test]
+    fn lean_emits_function_as_axiom() {
+        let prog = parse("fn add(a: i64, b: i64) -> i64 { a + b } fn main() {}");
+        let lean = LeanEmitter::emit_program(&prog, &[]);
+        assert!(lean.contains("axiom add"));
+    }
+
+    #[test]
+    fn coq_uses_unit_for_unit_return() {
+        // Coq fn with no return type → unit.
+        let prog = parse("fn nop() {} fn main() {}");
+        let coq = CoqEmitter::emit_program(&prog, &[]);
+        assert!(coq.contains("Parameter nop"));
+        assert!(coq.contains("unit"));
+    }
+
+    #[test]
+    fn coq_ty_maps_primitive_types() {
+        assert_eq!(coq_ty(&Ty::Named("i32".into())), "Z");
+        assert_eq!(coq_ty(&Ty::Named("u64".into())), "Z");
+        assert_eq!(coq_ty(&Ty::Named("f64".into())), "R");
+        assert_eq!(coq_ty(&Ty::Named("bool".into())), "bool");
+        assert_eq!(coq_ty(&Ty::Unit), "unit");
+    }
+
+    #[test]
+    fn lean_ty_maps_primitive_types() {
+        assert_eq!(lean_ty(&Ty::Named("i32".into())), "Int");
+        assert_eq!(lean_ty(&Ty::Named("u32".into())), "Nat");
+        assert_eq!(lean_ty(&Ty::Named("bool".into())), "Bool");
+        assert_eq!(lean_ty(&Ty::Unit), "Unit");
+    }
+
+    #[test]
+    fn coq_handles_tuple_types() {
+        let s = coq_ty(&Ty::Tuple(vec![
+            Ty::Named("i64".into()),
+            Ty::Named("bool".into()),
+        ]));
+        assert_eq!(s, "(Z * bool)");
+    }
+
+    #[test]
+    fn lean_handles_tuple_types() {
+        let s = lean_ty(&Ty::Tuple(vec![
+            Ty::Named("i64".into()),
+            Ty::Named("bool".into()),
+        ]));
+        assert_eq!(s, "(Int × Bool)");
+    }
+
+    #[test]
+    fn coq_handles_fn_pointer_types() {
+        let s = coq_ty(&Ty::FnPtr {
+            kind: String::new(),
+            params: vec![Ty::Named("i64".into())],
+            ret: Box::new(Ty::Named("bool".into())),
+        });
+        assert!(s.contains("Z -> bool"));
+    }
+}

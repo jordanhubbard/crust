@@ -31,7 +31,11 @@ CRUST_COVERAGE_MIN=0 make coverage
 
 The CI workflow uses a ratcheted baseline while the legacy suite is expanded to
 the strict gate. That value must only move upward; the developer default remains
-100 so verification-facing work does not normalize partial coverage.
+100 so verification-facing work does not normalize partial coverage. The current
+CI minimum is 50 (regions/lines/functions all measured at ≥52% as of 2026-05-04
+after the lib-level test additions for crust-d39). Modules with the largest
+remaining gaps: `eval.rs` (~33%), `stdlib.rs` (~27%), `repl.rs` (interactive,
+0%), `main.rs` (entry-point, 0%).
 
 Coverage exemptions must be explicit. Use `CRUST_COVERAGE_IGNORE_REGEX` only for
 generated code or code that cannot execute by construction, and document every

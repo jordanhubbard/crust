@@ -12,7 +12,13 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  CRUST_COVERAGE_MIN: "21"
+  # Ratcheted upward only — never lowered. Local default is 100 (see
+  # docs/testing.md); this CI value is the strict-floor for PRs while the
+  # legacy suite is expanded. Last bump: 21 → 50 (crust-d39, 2026-05-04)
+  # following lib-level test additions in codegen/contracts/proofgen/types/
+  # strictness/value modules. Current measured: regions 52.70%, lines 55.08%,
+  # functions 74.63%.
+  CRUST_COVERAGE_MIN: "50"
 
 jobs:
   quality:

@@ -446,3 +446,128 @@ pub fn check_unannotated_params(
     }
     diags
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+
+    fn parse(src: &str) -> Vec<Item> {
+        let tokens = Lexer::new(src).tokenize().unwrap();
+        Parser::new(tokens).parse_program().unwrap()
+    }
+
+    #[test]
+    fn return_type_mismatch_is_caught() {
+        let prog = parse("fn f() -> i64 { true }\nfn main() {}");
+        let diags = TypeChecker::check_program(&prog);
+        assert!(diags
+            .iter()
+            .any(|d| d.message.contains("return type mismatch")));
+    }
+
+    #[test]
+    fn matching_return_type_no_error() {
+        let prog = parse("fn f() -> i64 { 42 }\nfn main() {}");
+        let diags = TypeChecker::check_program(&prog);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn let_type_mismatch_is_caught() {
+        let prog = parse("fn main() { let x: bool = 42; }");
+        let diags = TypeChecker::check_program(&prog);
+        assert!(diags.iter().any(|d| d.message.contains("type mismatch")));
+    }
+
+    #[test]
+    fn numeric_coercion_int_and_float_compatible() {
+        // Crust's structural type checker treats Int and Float as compatible
+        // since interpreter widens integer literals.
+        let prog = parse("fn main() { let x: f64 = 1; }");
+        let diags = TypeChecker::check_program(&prog);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn from_ast_ty_maps_primitives() {
+        assert_eq!(
+            InferredType::from_ast_ty(&Ty::Named("i32".into())),
+            InferredType::Int
+        );
+        assert_eq!(
+            InferredType::from_ast_ty(&Ty::Named("f64".into())),
+            InferredType::Float
+        );
+        assert_eq!(
+            InferredType::from_ast_ty(&Ty::Named("bool".into())),
+            InferredType::Bool
+        );
+        assert_eq!(
+            InferredType::from_ast_ty(&Ty::Named("String".into())),
+            InferredType::Str
+        );
+    }
+
+    #[test]
+    fn from_ast_ty_handles_generics() {
+        let v =
+            InferredType::from_ast_ty(&Ty::Generic("Vec".into(), vec![Ty::Named("i64".into())]));
+        match v {
+            InferredType::Vec(inner) => assert_eq!(*inner, InferredType::Int),
+            _ => panic!("expected Vec<Int>"),
+        }
+    }
+
+    #[test]
+    fn from_ast_ty_handles_option_and_result() {
+        let opt =
+            InferredType::from_ast_ty(&Ty::Generic("Option".into(), vec![Ty::Named("i64".into())]));
+        assert!(matches!(opt, InferredType::Option(_)));
+
+        let res = InferredType::from_ast_ty(&Ty::Generic(
+            "Result".into(),
+            vec![Ty::Named("i64".into()), Ty::Named("String".into())],
+        ));
+        assert!(matches!(res, InferredType::Result(_, _)));
+    }
+
+    #[test]
+    fn display_shows_friendly_names() {
+        assert_eq!(InferredType::Int.to_string(), "integer");
+        assert_eq!(InferredType::Float.to_string(), "float");
+        assert_eq!(InferredType::Bool.to_string(), "bool");
+        assert_eq!(InferredType::Unit.to_string(), "()");
+        assert_eq!(InferredType::Never.to_string(), "!");
+        assert_eq!(InferredType::Unknown.to_string(), "?");
+    }
+
+    #[test]
+    fn display_handles_compound() {
+        let v = InferredType::Vec(Box::new(InferredType::Int));
+        assert_eq!(v.to_string(), "Vec<integer>");
+        let opt = InferredType::Option(Box::new(InferredType::Bool));
+        assert_eq!(opt.to_string(), "Option<bool>");
+        let tup = InferredType::Tuple(vec![InferredType::Int, InferredType::Bool]);
+        assert_eq!(tup.to_string(), "(integer, bool)");
+    }
+
+    #[test]
+    fn check_unannotated_params_silent_below_prove() {
+        let prog = parse("fn f(x) {}\nfn main() {}");
+        // Below Prove + llm_mode, this is silent.
+        let diags = check_unannotated_params(&prog, StrictnessLevel::Develop, true);
+        assert!(diags.is_empty());
+        let diags = check_unannotated_params(&prog, StrictnessLevel::Prove, false);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn check_unannotated_params_fires_at_prove_llm_mode() {
+        let prog = parse("fn f(x) -> i64 { 0 }\nfn main() {}");
+        let diags = check_unannotated_params(&prog, StrictnessLevel::Prove, true);
+        // Param x has no explicit type → flagged.
+        assert!(diags.iter().any(|d| d.message.contains("`x`")));
+    }
+}

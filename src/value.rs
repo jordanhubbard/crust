@@ -251,3 +251,114 @@ mod tests {
         assert!(!Value::Int(0).is_truthy());
     }
 }
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+
+    #[test]
+    fn type_name_for_each_variant() {
+        assert_eq!(Value::Int(1).type_name(), "i64");
+        assert_eq!(Value::Float(1.0).type_name(), "f64");
+        assert_eq!(Value::Bool(true).type_name(), "bool");
+        assert_eq!(Value::Str("a".into()).type_name(), "String");
+        assert_eq!(Value::Char('c').type_name(), "char");
+        assert_eq!(Value::Unit.type_name(), "()");
+        assert_eq!(Value::Vec(vec![]).type_name(), "Vec");
+        assert_eq!(Value::HashMap(HashMap::new()).type_name(), "HashMap");
+        assert_eq!(Value::Tuple(vec![]).type_name(), "tuple");
+        assert_eq!(Value::Range(0, 0, false).type_name(), "Range");
+        assert_eq!(Value::Option_(None).type_name(), "Option");
+        assert_eq!(
+            Value::Result_(Ok(Box::new(Value::Unit))).type_name(),
+            "Result"
+        );
+    }
+
+    #[test]
+    fn debug_repr_quotes_strings_and_chars() {
+        assert_eq!(Value::Str("hi".into()).debug_repr(), "\"hi\"");
+        assert_eq!(Value::Char('a').debug_repr(), "'a'");
+    }
+
+    #[test]
+    fn debug_repr_floats_show_decimal() {
+        // 58.0 should debug-print as "58.0", not "58"
+        let s = Value::Float(58.0).debug_repr();
+        assert!(s.contains('.'));
+    }
+
+    #[test]
+    fn debug_repr_recurses_into_compound() {
+        let v = Value::Vec(vec![Value::Int(1), Value::Str("two".into())]);
+        assert_eq!(v.debug_repr(), "[1, \"two\"]");
+    }
+
+    #[test]
+    fn debug_repr_handles_some_and_none() {
+        assert_eq!(
+            Value::Option_(Some(Box::new(Value::Int(5)))).debug_repr(),
+            "Some(5)"
+        );
+        assert_eq!(Value::Option_(None).debug_repr(), "None");
+    }
+
+    #[test]
+    fn debug_repr_handles_ok_and_err() {
+        assert_eq!(
+            Value::Result_(Ok(Box::new(Value::Int(5)))).debug_repr(),
+            "Ok(5)"
+        );
+        assert_eq!(
+            Value::Result_(Err(Box::new(Value::Str("e".into())))).debug_repr(),
+            "Err(\"e\")"
+        );
+    }
+
+    #[test]
+    fn debug_repr_tuple_struct_versus_named() {
+        let mut fields = HashMap::new();
+        fields.insert("0".to_string(), Value::Int(1));
+        fields.insert("1".to_string(), Value::Int(2));
+        let tup_struct = Value::Struct {
+            type_name: "Pair".to_string(),
+            fields,
+        };
+        // Tuple struct (numeric field keys) prints as Pair(1, 2)
+        let s = tup_struct.debug_repr();
+        assert!(s.starts_with("Pair("));
+    }
+
+    #[test]
+    fn display_for_enum_with_no_inner() {
+        let v = Value::Enum {
+            type_name: "Color".into(),
+            variant: "Red".into(),
+            inner: None,
+        };
+        assert_eq!(v.to_string(), "Color::Red");
+    }
+
+    #[test]
+    fn display_for_range() {
+        assert_eq!(Value::Range(0, 5, false).to_string(), "0..5");
+        assert_eq!(Value::Range(0, 5, true).to_string(), "0..=5");
+    }
+
+    #[test]
+    fn truthy_for_int_zero_is_false() {
+        assert!(!Value::Int(0).is_truthy());
+        assert!(Value::Int(-1).is_truthy());
+    }
+
+    #[test]
+    fn truthy_for_unit_is_false() {
+        assert!(!Value::Unit.is_truthy());
+    }
+
+    #[test]
+    fn truthy_for_other_compound_is_true() {
+        assert!(Value::Vec(vec![]).is_truthy());
+        assert!(Value::Str("".into()).is_truthy());
+    }
+}
