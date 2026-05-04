@@ -123,17 +123,17 @@ impl Analyzer {
             }
         }
 
-        // Overflow at Level ≥ Develop
+        // Overflow at Level ≥ Develop.
+        // At Level 4 (Prove), bare arithmetic is *not* an error — codegen
+        // lowers `+`, `-`, `*` to `checked_*().expect("arithmetic overflow")`,
+        // making the runtime overflow behaviour explicit. Reporting the same
+        // sites here as hard errors would block any program that does math
+        // before SMT discharge can run (crust-37a). Keep these as warnings
+        // at every level; analysis flags `as` casts separately as errors below
+        // because codegen does not lower those.
         if self.level >= StrictnessLevel::Develop {
             let overflow_sites = self.collect_overflow_sites(&f.body, &f.name);
-            if self.level >= StrictnessLevel::Prove {
-                diags.extend(overflow_sites.into_iter().map(|mut d| {
-                    d.error = true;
-                    d
-                }));
-            } else {
-                diags.extend(overflow_sites);
-            }
+            diags.extend(overflow_sites);
         }
 
         // Purity check at Level ≥ Prove (only for functions with #[pure])

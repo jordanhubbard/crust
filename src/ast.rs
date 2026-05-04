@@ -50,7 +50,11 @@ pub enum Expr {
     MethodCall {
         receiver: Box<Expr>,
         method: String,
-        turbofish: Option<String>,
+        /// Turbofish args from `expr.method::<T1, T2>(args)`. The original ident
+        /// is also stored as the *last* type's name when meaningful, so existing
+        /// eval-side logic that switches on a single name (e.g.,
+        /// `collect::<String>()`) continues to work.
+        turbofish: Option<Vec<Ty>>,
         args: Vec<Expr>,
     },
     Field(Box<Expr>, String),
@@ -159,6 +163,14 @@ pub enum Ty {
     /// Parsed at Level 2+ (Harden); currently stored but not emitted by the lexer at lower levels.
     #[allow(dead_code)]
     Lifetime(String),
+    /// Function pointer or `Fn`/`FnMut`/`FnOnce` trait sugar: `fn(T1, T2) -> R`,
+    /// `Fn(T) -> R`, etc. Captures the kind so codegen can re-emit faithfully.
+    /// `kind = ""` means a bare `fn(...)` pointer.
+    FnPtr {
+        kind: String,
+        params: Vec<Ty>,
+        ret: Box<Ty>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -242,12 +254,16 @@ pub struct Param {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<(String, Ty)>,
+    /// Attributes collected from `#[...]` lines preceding the struct.
+    /// Used to merge author-supplied derives with Crust's auto-derives.
+    pub attrs: Vec<Attr>,
 }
 
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
     pub variants: Vec<EnumVariant>,
+    pub attrs: Vec<Attr>,
 }
 
 #[derive(Debug, Clone)]
@@ -268,7 +284,10 @@ pub struct ImplDef {
     pub type_name: String,
     pub trait_name: Option<String>,
     pub methods: Vec<FnDef>,
-    pub consts: Vec<(String, Expr)>,
+    /// Associated constants: (name, declared type, initializer expression).
+    /// The type is required for codegen to emit a valid `const NAME: T = ...;`
+    /// (rustc rejects `_` placeholder types in associated-const positions, E0121).
+    pub consts: Vec<(String, Ty, Expr)>,
 }
 
 pub type Program = Vec<Item>;

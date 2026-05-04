@@ -38,6 +38,30 @@ fn break_signal(label: Option<String>, value: Option<Value>) -> Signal {
     Signal::Break(label, value.map(Box::new))
 }
 
+/// Extract a single-name turbofish label for the eval-side method-remapping
+/// logic. Returns the *first* type's name in formats it can recognise; complex
+/// generic forms like `Vec<i32>` are flattened to the outer name (`Vec`).
+fn turbofish_label(tf: &Option<Vec<Ty>>) -> Option<String> {
+    let tys = tf.as_ref()?;
+    let first = tys.first()?;
+    Some(match first {
+        Ty::Named(s) => s.clone(),
+        Ty::Generic(name, args) => {
+            // Reconstruct enough text for the contains() heuristics in the caller.
+            let inner = args
+                .iter()
+                .map(|t| match t {
+                    Ty::Named(n) => n.clone(),
+                    _ => "_".to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}<{}>", name, inner)
+        }
+        _ => return None,
+    })
+}
+
 // ── Format string normalization ───────────────────────────────────────────────
 
 /// Expand named {name} and positional {N} specs into sequential {}, reordering args.
@@ -432,20 +456,33 @@ impl Interpreter {
                     .entry(def.type_name.clone())
                     .or_default()
                     .extend(def.methods);
-                // Register associated constants as TypeName::CONST_NAME
-                for (const_name, const_expr) in &def.consts {
+                // Register associated constants as TypeName::CONST_NAME.
+                // Surface eval errors instead of silently dropping the constant —
+                // a failing const initializer should be a hard error at all
+                // strictness levels (crust-xwz).
+                for (const_name, _const_ty, const_expr) in &def.consts {
                     let env = Rc::new(RefCell::new(Env::new()));
-                    if let Ok(v) = self.eval_expr(const_expr, env) {
-                        let key = format!("{}::{}", def.type_name, const_name);
-                        self.consts.insert(key, v);
-                    }
+                    let v = self.eval_expr(const_expr, env).map_err(|s| match s {
+                        Signal::Err(e) => e,
+                        _ => CrustError::runtime(format!(
+                            "non-error control-flow signal evaluating const `{}::{}`",
+                            def.type_name, const_name
+                        )),
+                    })?;
+                    let key = format!("{}::{}", def.type_name, const_name);
+                    self.consts.insert(key, v);
                 }
             }
             Item::Const { name, value, .. } => {
                 let env = Rc::new(RefCell::new(Env::new()));
-                if let Ok(v) = self.eval_expr(&value, env) {
-                    self.consts.insert(name, v);
-                }
+                let v = self.eval_expr(&value, env).map_err(|s| match s {
+                    Signal::Err(e) => e,
+                    _ => CrustError::runtime(format!(
+                        "non-error control-flow signal evaluating const `{}`",
+                        name
+                    )),
+                })?;
+                self.consts.insert(name, v);
             }
             Item::Use(path) => {
                 // `use SomeEnum::*` — register all variants as constructors in global env
@@ -932,7 +969,8 @@ impl Interpreter {
             } => {
                 // Remap collect based on turbofish: collect::<String>() → "collect_string"
                 let method_str: String = if method == "collect" {
-                    match turbofish.as_deref() {
+                    let label = turbofish_label(turbofish);
+                    match label.as_deref() {
                         Some("String") => "collect_string".to_string(),
                         Some(t) if t.contains("HashSet") => "collect_hashset".to_string(),
                         Some(t) if t.contains("HashMap") => "collect_hashmap".to_string(),

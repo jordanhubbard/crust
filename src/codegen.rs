@@ -31,6 +31,12 @@ impl Codegen {
 
     pub fn emit_program(&mut self, items: &[Item]) -> String {
         let mut out = String::new();
+        // Suppress unused-import / unused-variable warnings on the generated file.
+        // Crust emits a fixed std prelude regardless of whether the user's program
+        // touches each item, so these warnings are noise.
+        out.push_str(
+            "#![allow(unused_imports, unused_variables, unused_mut, unused_parens, dead_code)]\n",
+        );
         out.push_str("use std::collections::HashMap;\n\n");
         for item in items {
             out.push_str(&self.emit_item(item));
@@ -74,11 +80,7 @@ impl Codegen {
 
     fn emit_struct(&mut self, s: &StructDef) -> String {
         let mut out = String::new();
-        // Level 0-2: auto-derive common traits so beginners don't hit E0277.
-        // Level 3+: no implicit derives; the developer controls the derive list.
-        if self.level < StrictnessLevel::Ship {
-            out.push_str("#[derive(Clone, Debug, PartialEq)]\n");
-        }
+        out.push_str(&self.emit_type_attrs(&s.attrs));
         out.push_str(&format!("struct {} {{\n", s.name));
         for (name, ty) in &s.fields {
             out.push_str(&format!("    {}: {},\n", name, self.emit_ty(ty)));
@@ -89,9 +91,7 @@ impl Codegen {
 
     fn emit_enum(&mut self, e: &EnumDef) -> String {
         let mut out = String::new();
-        if self.level < StrictnessLevel::Ship {
-            out.push_str("#[derive(Clone, Debug, PartialEq)]\n");
-        }
+        out.push_str(&self.emit_type_attrs(&e.attrs));
         out.push_str(&format!("enum {} {{\n", e.name));
         for v in &e.variants {
             out.push_str("    ");
@@ -129,11 +129,12 @@ impl Codegen {
             out.push_str(&format!("impl {} {{\n", i.type_name));
         }
         self.indent += 1;
-        for (name, expr) in &i.consts {
+        for (name, ty, expr) in &i.consts {
             out.push_str(&format!(
-                "{}const {}: _ = {};\n",
+                "{}const {}: {} = {};\n",
                 "    ".repeat(self.indent),
                 name,
+                self.emit_ty(ty),
                 self.emit_expr(expr)
             ));
         }
@@ -142,6 +143,49 @@ impl Codegen {
         }
         self.indent -= 1;
         out.push_str("}\n");
+        out
+    }
+
+    /// Emit `#[derive(...)]` (and any other unknown attrs) for a struct or enum.
+    /// At Level <Ship Crust auto-derives `Clone, Debug, PartialEq`; merge any
+    /// author-supplied derives in to avoid duplicates and preserve intent.
+    /// Author-supplied non-derive attrs (e.g. `#[repr(C)]`) are passed through verbatim.
+    fn emit_type_attrs(&self, attrs: &[Attr]) -> String {
+        let mut out = String::new();
+        let mut author_derives: Vec<String> = Vec::new();
+        for attr in attrs {
+            if let Attr::Unknown(content) = attr {
+                if let Some(rest) = content.strip_prefix("derive(") {
+                    if let Some(inner) = rest.strip_suffix(')') {
+                        for d in inner.split(',') {
+                            let d = d.trim().to_string();
+                            if !d.is_empty() && !author_derives.contains(&d) {
+                                author_derives.push(d);
+                            }
+                        }
+                        continue;
+                    }
+                }
+                out.push_str(&format!("#[{}]\n", content));
+            }
+        }
+        let mut all_derives: Vec<String> = if self.level < StrictnessLevel::Ship {
+            vec![
+                "Clone".to_string(),
+                "Debug".to_string(),
+                "PartialEq".to_string(),
+            ]
+        } else {
+            Vec::new()
+        };
+        for d in author_derives {
+            if !all_derives.contains(&d) {
+                all_derives.push(d);
+            }
+        }
+        if !all_derives.is_empty() {
+            out.push_str(&format!("#[derive({})]\n", all_derives.join(", ")));
+        }
         out
     }
 
@@ -303,6 +347,20 @@ impl Codegen {
                 )
             }
             Ty::Lifetime(lt) => format!("'{}", lt),
+            Ty::FnPtr { kind, params, ret } => {
+                let params_str = params
+                    .iter()
+                    .map(|t| self.emit_ty(t))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let prefix = if kind.is_empty() { "fn" } else { kind.as_str() };
+                let ret_str = if matches!(ret.as_ref(), Ty::Unit) {
+                    String::new()
+                } else {
+                    format!(" -> {}", self.emit_ty(ret))
+                };
+                format!("{}({}){}", prefix, params_str, ret_str)
+            }
         }
     }
 
@@ -415,15 +473,46 @@ impl Codegen {
             Expr::MethodCall {
                 receiver,
                 method,
+                turbofish,
                 args,
-                ..
             } => {
                 let args_str = args
                     .iter()
                     .map(|a| self.emit_expr_level0(a))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{}.{}({})", self.emit_expr(receiver), method, args_str)
+                let tf = match turbofish {
+                    Some(tys) if !tys.is_empty() => {
+                        let parts = tys
+                            .iter()
+                            .map(|t| self.emit_ty(t))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("::<{}>", parts)
+                    }
+                    _ => String::new(),
+                };
+                // At Level 0–2, Crust treats `.iter()` as yielding owned values
+                // (the interp clones; the Rust output should match). Inject
+                // `.cloned()` for the common `xs.iter()` case so closures and
+                // collect chains see `T` rather than `&T`. At Level 3+ the
+                // developer is expected to deal with references explicitly.
+                let needs_cloned = self.level < StrictnessLevel::Ship
+                    && method == "iter"
+                    && args.is_empty()
+                    && turbofish.is_none();
+                let base = format!(
+                    "{}.{}{}({})",
+                    self.emit_expr(receiver),
+                    method,
+                    tf,
+                    args_str
+                );
+                if needs_cloned {
+                    format!("{}.cloned()", base)
+                } else {
+                    base
+                }
             }
 
             Expr::Field(base, field) => format!("{}.{}", self.emit_expr(base), field),

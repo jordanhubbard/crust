@@ -101,13 +101,12 @@ fn emit_coq_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
         .collect::<Vec<_>>()
         .join(" ");
 
-    let ret_str = f
+    let ret_ty = f
         .ret_ty
         .as_ref()
         .map(coq_ty)
         .unwrap_or_else(|| "unit".into());
 
-    // Extract requires / ensures for this function
     let requires: Vec<String> = f
         .attrs
         .iter()
@@ -133,41 +132,61 @@ fn emit_coq_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
 
     let fn_vcs: Vec<&VerifCondition> = all_vcs.iter().filter(|v| v.fn_name == f.name).collect();
 
+    // 1. Always emit the function as an uninterpreted Parameter so its name
+    //    is in scope for any later contract theorem. This is the "spec"
+    //    placeholder — a real verifier (crust-v8b) would replace it with a
+    //    `Definition` reflecting the body.
+    let param_arrow_chain: String = if f.params.iter().all(|p| p.is_self) {
+        ret_ty.clone()
+    } else {
+        let mut chain: Vec<String> = f
+            .params
+            .iter()
+            .filter(|p| !p.is_self)
+            .map(|p| coq_ty(&p.ty))
+            .collect();
+        chain.push(ret_ty.clone());
+        chain.join(" -> ")
+    };
+    out.push_str(&format!(
+        "(* Uninterpreted spec for {} (real proof requires body interpretation) *)\n\
+         Parameter {} : {}.\n",
+        f.name, f.name, param_arrow_chain,
+    ));
+
     if requires.is_empty() && ensures.is_empty() && fn_vcs.is_empty() {
-        // No contracts → emit a simple axiom placeholder
-        out.push_str(&format!(
-            "(* Specification for {} *)\n\
-             Axiom {}_spec : forall{}, {}.\n",
-            f.name,
-            f.name,
-            if params_str.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", params_str)
-            },
-            ret_str,
-        ));
         return out;
     }
 
-    // Build precondition
     let pre = if requires.is_empty() {
         "True".into()
     } else {
         requires.join(" /\\ ")
     };
-
-    // Build postcondition (using `result` for the return value)
     let post = if ensures.is_empty() {
         "True".into()
     } else {
         ensures.join(" /\\ ")
     };
 
+    // Apply the function to its parameters to bind `result`.
+    let call_args: String = f
+        .params
+        .iter()
+        .filter(|p| !p.is_self)
+        .map(|p| p.name.clone())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let call_expr = if call_args.is_empty() {
+        f.name.clone()
+    } else {
+        format!("({} {})", f.name, call_args)
+    };
+
     out.push_str(&format!(
         "(* Contract theorem for {} *)\n\
-         Theorem {}_contract{} :\n  {} ->\n  let result := (* body *) tt in\n  {}.\n\
-         Proof.\n  admit. (* TODO: fill in proof *)\nQed.\n",
+         Theorem {}_contract{} :\n  {} ->\n  let result := {} in\n  {}.\n\
+         Proof.\n  intros. admit.\nAdmitted.\n",
         f.name,
         f.name,
         if params_str.is_empty() {
@@ -176,11 +195,18 @@ fn emit_coq_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
             format!(" {}", params_str)
         },
         pre,
+        call_expr,
         post,
     ));
 
-    // Additional VCs
+    // Auxiliary VCs: emit only those that reference *parameters only*
+    // (they're meaningful as standalone lemmas). Postcondition VCs reference
+    // `result`, which only makes sense inside the contract theorem above.
     for (i, vc) in fn_vcs.iter().enumerate() {
+        if vc.expr.contains("result") {
+            // Skip — already handled inside the contract theorem.
+            continue;
+        }
         out.push_str(&format!(
             "(* VC #{}: [{}] {} *)\n\
              Lemma {}_{}_vc_{}{} : {}.\nProof. admit. Qed.\n",
@@ -234,6 +260,12 @@ fn coq_ty(ty: &Ty) -> String {
             }
         }
         Ty::Lifetime(_) => "unit".into(), // lifetimes have no Coq representation
+        Ty::FnPtr { params, ret, .. } => {
+            // Coq curried function arrow: T1 -> T2 -> ... -> R
+            let mut chain: Vec<String> = params.iter().map(coq_ty).collect();
+            chain.push(coq_ty(ret));
+            format!("({})", chain.join(" -> "))
+        }
     }
 }
 
@@ -351,7 +383,7 @@ fn emit_lean_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
         .collect::<Vec<_>>()
         .join(" ");
 
-    let ret_str = f
+    let ret_ty = f
         .ret_ty
         .as_ref()
         .map(lean_ty)
@@ -382,6 +414,31 @@ fn emit_lean_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
 
     let fn_vcs: Vec<&VerifCondition> = all_vcs.iter().filter(|v| v.fn_name == f.name).collect();
 
+    // Emit the function as an axiom so its name is in scope for theorems below.
+    // A real verifier (crust-v8b) would replace this with a `def` matching the
+    // body. `axiom` (Lean 4) is the equivalent of Coq's `Parameter`.
+    let arrow_chain: String = if f.params.iter().all(|p| p.is_self) {
+        ret_ty.clone()
+    } else {
+        let mut chain: Vec<String> = f
+            .params
+            .iter()
+            .filter(|p| !p.is_self)
+            .map(|p| lean_ty(&p.ty))
+            .collect();
+        chain.push(ret_ty.clone());
+        chain.join(" → ")
+    };
+    out.push_str(&format!(
+        "-- Uninterpreted spec for {} (real proof requires body interpretation)\n\
+         axiom {} : {}\n",
+        f.name, f.name, arrow_chain,
+    ));
+
+    if requires.is_empty() && ensures.is_empty() && fn_vcs.is_empty() {
+        return out;
+    }
+
     let pre = if requires.is_empty() {
         "True".into()
     } else {
@@ -393,10 +450,23 @@ fn emit_lean_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
         ensures.join(" ∧ ")
     };
 
+    let call_args: String = f
+        .params
+        .iter()
+        .filter(|p| !p.is_self)
+        .map(|p| p.name.clone())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let call_expr = if call_args.is_empty() {
+        f.name.clone()
+    } else {
+        format!("({} {})", f.name, call_args)
+    };
+
     if !requires.is_empty() || !ensures.is_empty() {
         out.push_str(&format!(
             "-- Contract theorem for {}\n\
-             theorem {}_contract {}: {} → {} := by\n  sorry\n",
+             theorem {}_contract{} : {} → (let result := {}; {}) := by\n  sorry\n",
             f.name,
             f.name,
             if params_str.is_empty() {
@@ -405,25 +475,15 @@ fn emit_lean_fn_spec(f: &FnDef, all_vcs: &[VerifCondition]) -> String {
                 format!(" {}", params_str)
             },
             pre,
+            call_expr,
             post,
-        ));
-    } else {
-        out.push_str(&format!(
-            "-- Specification for {}\n\
-             opaque {}_spec {}: {} := by sorry\n",
-            f.name,
-            f.name,
-            if params_str.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", params_str)
-            },
-            ret_str,
         ));
     }
 
-    // Additional VCs
     for (i, vc) in fn_vcs.iter().enumerate() {
+        if vc.expr.contains("result") {
+            continue; // referenced inside the contract theorem
+        }
         out.push_str(&format!(
             "-- VC #{}: [{}] {}\n\
              theorem {}_{}_vc_{} {}: {} := by\n  sorry\n",
@@ -477,6 +537,11 @@ fn lean_ty(ty: &Ty) -> String {
             }
         }
         Ty::Lifetime(_) => "Unit".into(),
+        Ty::FnPtr { params, ret, .. } => {
+            let mut chain: Vec<String> = params.iter().map(lean_ty).collect();
+            chain.push(lean_ty(ret));
+            format!("({})", chain.join(" → "))
+        }
     }
 }
 

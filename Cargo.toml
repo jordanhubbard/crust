@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 description = "rustc backwards — an interpreted Rust that always knows what you meant"
 license = "MIT"
-authors = ["Natasha Fatale", "Rocky J. Squirrel", "t peps"]
+authors = ["The Crust Authors"]
 
 [[bin]]
 name = "crust"

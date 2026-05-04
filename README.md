@@ -70,18 +70,24 @@ Stanford researchers confirmed it ([Zeng & Crichton, 2018](https://arxiv.org/abs
 
 Crust doesn't change Rust. It sequences the learning curve.
 
-Every one of those top 10 errors has a reasonable default that a beginner doesn't need to understand yet:
+Every one of those top 10 errors has a reasonable default that a beginner doesn't need to understand yet. The list below is the **target design**; the
+"Status" column tracks what's actually implemented today.
 
-| Error | What Crust does at Level 0 |
-|-------|---------------------------|
-| E0277 — Missing trait impl | Auto-derive common traits (Debug, Clone, Display) |
-| E0308 — Type mismatch | Implicit coercion where safe (i32 ↔ i64, &str ↔ String) |
-| E0599 — Method not found | Suggest + auto-import, try common iterator adapters |
-| E0382 — Use after move | Implicit clone |
-| E0282 — Can't infer type | Widen inference, default to concrete types |
-| E0106 — Missing lifetime | Elide aggressively, default to `'_` |
+| Error | Crust Level 0 behaviour | Status |
+|-------|-------------------------|--------|
+| E0277 — Missing trait impl | Auto-derive `Clone`, `Debug`, `PartialEq` on user types; merge with author-supplied derives | Implemented |
+| E0382 — Use after move | Implicit clone on identifier-shaped argument and field positions | Partial — see [bd](#known-gaps) `crust-ovw` |
+| E0308 — Type mismatch | Safe numeric coercion in the interpreter | Partial — codegen does not always preserve widths (`crust-6yj`) |
+| E0282 — Can't infer type | Turbofish round-trips, integer literal defaulting | Implemented |
+| E0599 — Method not found | Auto-resolve common stdlib methods | Partial — no fuzzy match yet (`crust-k15`) |
+| E0432 — Unresolved import | Auto-import std prelude paths | **Not implemented** (`crust-k15`) |
+| E0425 — Unresolved name | Fuzzy match + suggest | **Not implemented** (`crust-k15`) |
+| E0106 — Missing lifetime | Elide aggressively | **Not implemented** (`crust-1x4`, `crust-ovw`) |
 
-The code is still Rust. The binary is still Rust. The developer just doesn't get punched in the face on day one.
+The code is still Rust. The generated binary is still produced by `rustc`. The
+developer doesn't get punched in the face on day one — but the strictness dial
+is still under active development; see [Current Status](#current-status) and
+the open beads issues for what's done vs in flight.
 
 ### The Strictness Dial
 
@@ -99,7 +105,11 @@ Level 3: Ship       — full rustc parity, cargo clippy clean, zero-cost abstrac
                       "This IS rustc"
 ```
 
-At Level 3, `crust build` and `rustc` produce identical output. Because the code was always Rust — it just had a patient teacher.
+> **Current state:** Levels 0 and 4 are partly wired (Level 0 codegen + Level 4
+> contract / SMT scaffolding). Levels 1, 2, 3 still mostly affect diagnostics
+> rather than enforcement — tracked in `crust-o3a`. The "Level 3 ↔ rustc parity"
+> claim is aspirational pending full ownership-relaxation analysis (`crust-ovw`)
+> and a real compatibility contract (`crust-u5k`).
 
 ---
 
@@ -151,13 +161,18 @@ Crust doesn't compete with Rust. **Crust manufactures Rust developers.**
 
 ## Quick Start
 
+Build and install from this repository (no crates.io publish yet):
+
 ```bash
-cargo install crust
+make install                    # builds release and installs into /usr/local/bin
 
 crust run hello.crust           # interpret + run
-crust build hello.crust -o app  # compile to native binary
-crust build --emit-rs lib.crust # see the Rust that Crust generates
+crust build hello.crust -o app  # compile a self-contained .crust file via rustc
+crust build --emit-rs lib.crust # also write the generated .rs alongside
 ```
+
+`crust` accepts a single `.crust` file with `std`-only imports today. Cargo
+project / external-crate support is tracked in `crust-ti9`.
 
 ## Development
 
@@ -168,9 +183,17 @@ for the TDD and coverage policy.
 
 ## Current Status
 
-**v0.2.0** — Level 0 complete.
+**v0.2.0** — Level 0 interpreter is broadly working; codegen is partial.
 
-The Level 0 interpreter now covers essentially all of Rust's expression language:
+The Level 0 **interpreter** (`crust run`) covers most of Rust's expression
+language for self-contained programs. The Level 0 **code generator**
+(`crust build`) compiles a useful subset to native binaries via `rustc` —
+small examples round-trip cleanly, but anything that relies on real ownership
+analysis (`.iter()` reference semantics, lifetime elision, refutable patterns
+in `let`) does not yet emit valid Rust. See the open beads tracker for the
+authoritative list.
+
+Implemented in the interpreter:
 
 - **All primitive types**: `i8`–`i64`, `u8`–`u64`, `f32`/`f64`, `bool`, `char`, `str`/`String`
 - **Collections**: `Vec`, `HashMap`, `HashSet`, `BTreeMap`, `VecDeque` (all backed by Vec/HashMap at Level 0)
@@ -184,6 +207,18 @@ The Level 0 interpreter now covers essentially all of Rust's expression language
 - **String formatting**: width, alignment, fill, precision, hex/bin/oct, named args
 - **Associated constants** (`impl Type { const FOO: T = v; }`)
 - **Array repeat syntax** (`[val; N]`)
+
+### Known gaps
+
+These are tracked in the beads issue database (run `bd ready` to see priorities):
+
+- `crust-ovw` — Level 0 ownership-relaxation analysis is not implemented; `.iter()`/closure capture/move-after-clone scenarios fail to round-trip through `crust build`.
+- `crust-1x4` — parser uses `skip_generics` / `skip_where` for many constructs; modules (`mod foo {}`), const generics, and where-clauses are not modelled.
+- `crust-rvq` / `crust-ti9` — no module system, no Cargo.toml integration; `crust` accepts a single file with std-only imports.
+- `crust-570` — `std::sync`, `std::thread`, `Arc`, `Mutex`, `mpsc::channel` are unimplemented.
+- `crust-6yj` — primitive integer types collapse to `i64` in the interpreter; widths/signedness are not preserved.
+- `crust-7e8` / `crust-v8b` — `--strict=4` SMT discharge is consistency-only without a body interpreter; emitted Coq/Lean files are uninterpreted-axiom skeletons.
+- `crust-o3a` — Levels 1–3 are mostly diagnostics-shaped; the strictness dial does not yet engage rustc's borrow checker or clippy.
 
 See [DESIGN.md](DESIGN.md) for the full technical architecture and roadmap.
 

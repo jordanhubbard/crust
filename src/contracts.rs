@@ -111,12 +111,27 @@ impl ContractChecker {
 
     /// Attempt to discharge VCs using `z3` (if present on PATH).
     ///
-    /// Each VC is encoded as an SMTLIB2 script that asserts the *negation*
-    /// of the VC; if z3 returns `unsat`, the VC is proved.
+    /// Note on semantics: Crust does not perform symbolic execution of the
+    /// function body, so it cannot fully prove `forall p. P(p) => Q(f(p))`.
+    /// What it *can* do without a body interpreter:
+    ///
+    ///   - For `#[requires(P)]`: check that `P` is satisfiable (i.e., the
+    ///     precondition can be met by *some* input). If unsat, the contract
+    ///     is contradictory and any caller will fail it. This is a real
+    ///     consistency check — the previous implementation asserted
+    ///     `(not P)` and called every non-tautology a "DISPROVED requires",
+    ///     which is mathematically wrong (crust-yi3).
+    ///
+    ///   - For `#[ensures(Q)]`: declare `result` as a free variable of the
+    ///     return sort so `Q` references it without "unknown constant" errors,
+    ///     then check whether `(and preconditions (not Q))` is unsat (i.e.,
+    ///     no model satisfies preconditions while violating the postcondition,
+    ///     treating the body as an uninterpreted function). This is still
+    ///     incomplete without a body interpreter (crust-7e8, crust-v8b) but
+    ///     no longer reports false counter-examples.
     pub fn check_with_smt(vcs: &[VerifCondition]) -> Vec<String> {
         let mut results = Vec::new();
 
-        // Check if z3 is available
         let z3_available = Command::new("z3")
             .arg("--version")
             .stdout(Stdio::null())
@@ -130,46 +145,104 @@ impl ContractChecker {
             return results;
         }
 
+        // Group VCs by function so each function's preconditions can serve as
+        // assumptions for that function's postconditions.
+        let mut by_fn: std::collections::BTreeMap<&str, Vec<&VerifCondition>> =
+            std::collections::BTreeMap::new();
         for vc in vcs {
-            if vc.smtlib.is_empty() {
-                results.push(format!(
-                    "SKIP  [{}:{}] (no SMTLIB encoding)",
-                    vc.fn_name,
-                    vc.kind_str()
-                ));
-                continue;
-            }
-            // Wrap in (assert (not ...)) to check satisfiability of the negation
-            let script = format!(
-                "{}\n(assert (not {}))\n(check-sat)\n",
-                vc.smtlib,
-                smtlib_of_expr_str(&vc.expr),
-            );
-            match run_z3(&script) {
-                Some(output) if output.trim() == "unsat" => results.push(format!(
-                    "PROVED  [{}:{}] {}",
-                    vc.fn_name,
-                    vc.kind_str(),
-                    vc.expr
-                )),
-                Some(output) if output.trim() == "sat" => results.push(format!(
-                    "DISPROVED [{}:{}] {} (counter-example found)",
-                    vc.fn_name,
-                    vc.kind_str(),
-                    vc.expr
-                )),
-                Some(output) => results.push(format!(
-                    "UNKNOWN [{}:{}] {} (solver: {})",
-                    vc.fn_name,
-                    vc.kind_str(),
-                    vc.expr,
-                    output.trim()
-                )),
-                None => results.push(format!(
-                    "ERROR  [{}:{}] z3 invocation failed",
-                    vc.fn_name,
-                    vc.kind_str()
-                )),
+            by_fn.entry(vc.fn_name.as_str()).or_default().push(vc);
+        }
+
+        for (fn_name, fn_vcs) in by_fn {
+            // The first VC's smtlib carries the parameter preamble; reuse it.
+            let preamble = fn_vcs.first().map(|v| v.smtlib.clone()).unwrap_or_default();
+            let pre_clauses: Vec<String> = fn_vcs
+                .iter()
+                .filter(|v| matches!(v.kind, VcKind::Precondition))
+                .map(|v| smtlib_of_expr_str(&v.expr))
+                .collect();
+
+            for vc in &fn_vcs {
+                let body_smt = smtlib_of_expr_str(&vc.expr);
+                let (script, prove_on_unsat) = match vc.kind {
+                    VcKind::Precondition => {
+                        // Satisfiability: precondition consistent iff sat.
+                        (
+                            format!("{}\n(assert {})\n(check-sat)\n", preamble, body_smt),
+                            false,
+                        )
+                    }
+                    VcKind::Postcondition => {
+                        // Declare `result` as a free Int (best-effort sort).
+                        // Negate Q and conjoin with preconditions; unsat means
+                        // no precondition-satisfying model violates Q.
+                        let pre_conj = if pre_clauses.is_empty() {
+                            "true".to_string()
+                        } else if pre_clauses.len() == 1 {
+                            pre_clauses[0].clone()
+                        } else {
+                            format!("(and {})", pre_clauses.join(" "))
+                        };
+                        (
+                            format!(
+                                "{}\n(declare-const result Int)\n\
+                                 (assert {})\n\
+                                 (assert (not {}))\n\
+                                 (check-sat)\n",
+                                preamble, pre_conj, body_smt
+                            ),
+                            true,
+                        )
+                    }
+                    VcKind::Invariant => (
+                        format!("{}\n(assert {})\n(check-sat)\n", preamble, body_smt),
+                        false,
+                    ),
+                    VcKind::NoOverflow | VcKind::NoPanic => (
+                        format!("{}\n(assert (not {}))\n(check-sat)\n", preamble, body_smt),
+                        true,
+                    ),
+                };
+
+                let label = vc.kind_str();
+                match run_z3(&script) {
+                    Some(output) => {
+                        let r = output.trim();
+                        if r == "unsat" {
+                            if prove_on_unsat {
+                                results
+                                    .push(format!("PROVED  [{}:{}] {}", fn_name, label, vc.expr));
+                            } else {
+                                // For sat-checks, unsat means contradictory.
+                                results.push(format!(
+                                    "INCONSISTENT [{}:{}] {} (no model satisfies it)",
+                                    fn_name, label, vc.expr
+                                ));
+                            }
+                        } else if r == "sat" {
+                            if prove_on_unsat {
+                                results.push(format!(
+                                    "DISPROVED [{}:{}] {} (counter-example found)",
+                                    fn_name, label, vc.expr
+                                ));
+                            } else {
+                                results.push(format!(
+                                    "CONSISTENT [{}:{}] {}",
+                                    fn_name, label, vc.expr
+                                ));
+                            }
+                        } else {
+                            results.push(format!(
+                                "UNKNOWN [{}:{}] {} (solver: {})",
+                                fn_name, label, vc.expr, r
+                            ));
+                        }
+                    }
+                    None => results.push(format!(
+                        "ERROR  [{}:{}] z3 invocation failed",
+                        fn_name, label
+                    )),
+                }
             }
         }
         results
@@ -281,6 +354,13 @@ fn smtlib_expr(expr: &Expr) -> String {
         Expr::Unary(UnOp::Not, e) => format!("(not {})", smtlib_expr(e)),
         _ => format!("; complex: {:?}", expr),
     }
+}
+
+/// Public alias used by the verify-report writer in main.rs so the JSON
+/// output shows readable Rust source for `#[requires]` / `#[ensures]`
+/// instead of Debug-AST forms.
+pub fn pretty_predicate(expr: &Expr) -> String {
+    pretty_expr(expr)
 }
 
 /// Pretty-print an expression back to Rust syntax (simplified).

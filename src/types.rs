@@ -76,6 +76,7 @@ impl InferredType {
             },
             Ty::Slice(inner) => InferredType::Vec(Box::new(InferredType::from_ast_ty(inner))),
             Ty::Lifetime(_) => InferredType::Unknown,
+            Ty::FnPtr { .. } => InferredType::Named("fn".into()),
         }
     }
 

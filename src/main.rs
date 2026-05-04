@@ -177,16 +177,22 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
     let analyzer = analysis::Analyzer::new(opts.level, opts.llm_mode);
     let diagnostics = analyzer.analyze_program(&program);
 
-    // At Level 4, analysis errors are hard failures.
     let error_count = diagnostics.iter().filter(|d| d.is_error()).count();
     if !diagnostics.is_empty() {
         for d in &diagnostics {
             eprintln!("{}", d.format());
         }
     }
-    if opts.level >= StrictnessLevel::Prove && error_count > 0 {
+    // Hard-fail rules:
+    //   --strict=4 (Prove) treats every error diagnostic as a build failure.
+    //   --llm-mode advertises hard guardrails ("ban unsafe, unwrap, todo!"),
+    //   so any LlmGuardrail / UnsafeUsage / PurityViolation error must also
+    //   fail the build regardless of level — otherwise the contract is a lie.
+    let is_hard_failure =
+        opts.level >= StrictnessLevel::Prove || (opts.llm_mode && error_count > 0);
+    if is_hard_failure && error_count > 0 {
         return Err(CrustError::runtime(format!(
-            "{} analysis error(s) at --strict=4; fix them or lower --strict",
+            "{} analysis error(s); fix them or relax --strict / drop --llm-mode",
             error_count
         )));
     }
@@ -200,6 +206,18 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
         if opts.level >= StrictnessLevel::Prove && !type_diags.is_empty() {
             return Err(CrustError::runtime("type errors at --strict=4"));
         }
+    }
+
+    // ── Unannotated-parameter check (--strict=4 --llm-mode contract) ─────────
+    let param_diags = types::check_unannotated_params(&program, opts.level, opts.llm_mode);
+    for d in &param_diags {
+        eprintln!("type: [{}] {}", d.function, d.message);
+    }
+    if !param_diags.is_empty() {
+        return Err(CrustError::runtime(format!(
+            "{} parameter-annotation error(s) at --strict=4 --llm-mode",
+            param_diags.len()
+        )));
     }
 
     // ── Codegen ───────────────────────────────────────────────────────────────
@@ -255,8 +273,12 @@ fn build_file_with_opts(opts: &BuildOptions) -> Result<()> {
     }
 
     // ── Invoke rustc ─────────────────────────────────────────────────────────
+    // Edition 2021 is required for `async fn`, edition-2018 path forms, and the
+    // newer disjoint-closure-capture rules. Without `--edition` rustc defaults
+    // to 2015 which rejects most of what Crust emits.
     let status = Command::new("rustc")
         .arg(&tmp_rs)
+        .arg("--edition=2021")
         .arg("-o")
         .arg(&opts.output)
         .arg("-C")
@@ -334,7 +356,12 @@ fn verify_cmd(args: &[String]) {
     let type_diags = types::TypeChecker::check_program(&program);
     let vcs = contracts::ContractChecker::extract_vcs(&program);
 
-    if opts.emit_proof {
+    // Compute the error gate up front so --emit-proof only writes proof
+    // skeletons when the program would actually pass verify (crust-6kw).
+    let has_errors = diagnostics.iter().any(|d| d.is_error())
+        || (!type_diags.is_empty() && opts.level >= StrictnessLevel::Prove);
+
+    if opts.emit_proof && !has_errors {
         let coq = proofgen::CoqEmitter::emit_program(&program, &vcs);
         let lean = proofgen::LeanEmitter::emit_program(&program, &vcs);
         let coq_path = Path::new(&opts.source_file).with_extension("v");
@@ -347,14 +374,14 @@ fn verify_cmd(args: &[String]) {
         }
         eprintln!("   Emitted  {}", coq_path.display());
         eprintln!("   Emitted  {}", lean_path.display());
+    } else if opts.emit_proof {
+        eprintln!("   Skipped  proof emission (verify reported errors)");
     }
 
     // Build the verify report as JSON
     let report = build_verify_report(&program, &diagnostics, &type_diags, &vcs);
     println!("{}", report);
 
-    let has_errors = diagnostics.iter().any(|d| d.is_error())
-        || (!type_diags.is_empty() && opts.level >= StrictnessLevel::Prove);
     if has_errors {
         std::process::exit(1);
     }
@@ -376,10 +403,12 @@ fn build_verify_report(
             let mut ensures: Vec<String> = Vec::new();
             let is_pure = f.attrs.iter().any(|a| matches!(a, Attr::Pure));
 
+            // Pretty-print contract predicates back to readable Rust source
+            // rather than emitting Debug-AST forms (Binary(Ne, Ident("s"), ...)).
             for attr in &f.attrs {
                 match attr {
-                    Attr::Requires(e) => requires.push(format!("{:?}", e)),
-                    Attr::Ensures(e) => ensures.push(format!("{:?}", e)),
+                    Attr::Requires(e) => requires.push(contracts::pretty_predicate(e)),
+                    Attr::Ensures(e) => ensures.push(contracts::pretty_predicate(e)),
                     _ => {}
                 }
             }
@@ -446,14 +475,38 @@ fn build_verify_report(
     )
 }
 
-/// Format a slice of strings as a JSON array of string values,
-/// escaping interior double-quotes.
+/// Format a slice of strings as a JSON array of string values, with full
+/// escaping for backslash, double-quote, and control characters per RFC 8259.
 fn json_str_array(items: &[String]) -> String {
     items
         .iter()
-        .map(|s| format!("\"{}\"", s.replace('"', "\\\"")))
+        .map(|s| json_string(s))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Encode a single Rust string as a JSON string literal (with surrounding
+/// quotes), escaping `"`, `\`, and control characters per RFC 8259.
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 // ── help / version ────────────────────────────────────────────────────────────

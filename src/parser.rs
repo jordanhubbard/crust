@@ -211,11 +211,15 @@ impl Parser {
             }
             TokenKind::Struct => {
                 self.advance();
-                Ok(Item::Struct(self.parse_struct()?))
+                let mut def = self.parse_struct()?;
+                def.attrs = attrs;
+                Ok(Item::Struct(def))
             }
             TokenKind::Enum => {
                 self.advance();
-                Ok(Item::Enum(self.parse_enum()?))
+                let mut def = self.parse_enum()?;
+                def.attrs = attrs;
+                Ok(Item::Enum(def))
             }
             TokenKind::Impl => {
                 self.advance();
@@ -369,13 +373,18 @@ impl Parser {
             }
             self.expect(&TokenKind::RParen)?;
             self.eat(&TokenKind::Semi);
-            return Ok(StructDef { name, fields });
+            return Ok(StructDef {
+                name,
+                fields,
+                attrs: Vec::new(),
+            });
         }
         // Unit struct: struct Foo;
         if self.eat(&TokenKind::Semi) {
             return Ok(StructDef {
                 name,
                 fields: Vec::new(),
+                attrs: Vec::new(),
             });
         }
         self.expect(&TokenKind::LBrace)?;
@@ -391,7 +400,11 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace)?;
-        Ok(StructDef { name, fields })
+        Ok(StructDef {
+            name,
+            fields,
+            attrs: Vec::new(),
+        })
     }
 
     fn parse_enum(&mut self) -> Result<EnumDef> {
@@ -442,7 +455,11 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace)?;
-        Ok(EnumDef { name, variants })
+        Ok(EnumDef {
+            name,
+            variants,
+            attrs: Vec::new(),
+        })
     }
 
     fn parse_impl(&mut self) -> Result<ImplDef> {
@@ -474,14 +491,18 @@ impl Parser {
             } else if self.check(&TokenKind::Const) {
                 self.advance(); // consume `const`
                 let const_name = self.expect_ident()?;
-                // skip type annotation
-                if self.eat(&TokenKind::Colon) {
-                    let _ = self.parse_ty()?;
-                }
+                // Capture the declared type so codegen can emit
+                // `const NAME: TY = ...;` (rustc rejects `_` placeholder for
+                // associated consts — E0121).  Default to `i64` if missing.
+                let const_ty = if self.eat(&TokenKind::Colon) {
+                    self.parse_ty()?
+                } else {
+                    Ty::Named("i64".to_string())
+                };
                 self.expect(&TokenKind::Eq)?;
                 let val = self.parse_expr(0)?;
                 self.eat(&TokenKind::Semi);
-                consts.push((const_name, val));
+                consts.push((const_name, const_ty, val));
             } else if self.check(&TokenKind::Type) {
                 // skip type aliases
                 while !matches!(
@@ -681,32 +702,30 @@ impl Parser {
                 Ok(Ty::Slice(Box::new(inner)))
             }
             TokenKind::Fn | TokenKind::Ident(_) | TokenKind::SelfKw => {
-                // fn(T, ...) -> R  — function pointer type (skip params/ret, treat as Named("fn"))
+                // fn(T, ...) -> R — record params and return type as Ty::FnPtr
+                // so codegen can re-emit a valid Rust function pointer type.
                 if self.check(&TokenKind::Fn) {
                     self.advance();
+                    let mut params: Vec<Ty> = Vec::new();
                     if self.eat(&TokenKind::LParen) {
-                        let mut depth = 1usize;
-                        while depth > 0 {
-                            match self.peek() {
-                                TokenKind::LParen => {
-                                    self.advance();
-                                    depth += 1;
-                                }
-                                TokenKind::RParen => {
-                                    self.advance();
-                                    depth -= 1;
-                                }
-                                TokenKind::Eof => break,
-                                _ => {
-                                    self.advance();
-                                }
+                        while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
+                            params.push(self.parse_ty()?);
+                            if !self.eat(&TokenKind::Comma) {
+                                break;
                             }
                         }
+                        self.eat(&TokenKind::RParen);
                     }
-                    if self.eat(&TokenKind::Arrow) {
-                        let _ = self.parse_ty()?;
-                    }
-                    return Ok(Ty::Named("fn".to_string()));
+                    let ret = if self.eat(&TokenKind::Arrow) {
+                        self.parse_ty()?
+                    } else {
+                        Ty::Unit
+                    };
+                    return Ok(Ty::FnPtr {
+                        kind: String::new(),
+                        params,
+                        ret: Box::new(ret),
+                    });
                 }
                 // could be a path like std::string::String
                 let name = match self.peek().clone() {
@@ -733,22 +752,30 @@ impl Parser {
                 if name == "dyn" {
                     return self.parse_ty();
                 }
-                // Fn(T) -> R trait syntax
+                // Fn(T) -> R / FnMut / FnOnce — capture as Ty::FnPtr so codegen
+                // can emit `Fn(T) -> R` rather than the bare token "fn".
                 if matches!(name.as_str(), "Fn" | "FnMut" | "FnOnce")
                     && self.check(&TokenKind::LParen)
                 {
                     self.eat(&TokenKind::LParen);
+                    let mut params: Vec<Ty> = Vec::new();
                     while !self.check(&TokenKind::RParen) && !self.check(&TokenKind::Eof) {
-                        let _ = self.parse_ty()?;
+                        params.push(self.parse_ty()?);
                         if !self.eat(&TokenKind::Comma) {
                             break;
                         }
                     }
                     self.eat(&TokenKind::RParen);
-                    if self.eat(&TokenKind::Arrow) {
-                        let _ = self.parse_ty()?;
-                    }
-                    return Ok(Ty::Named("fn".to_string()));
+                    let ret = if self.eat(&TokenKind::Arrow) {
+                        self.parse_ty()?
+                    } else {
+                        Ty::Unit
+                    };
+                    return Ok(Ty::FnPtr {
+                        kind: name,
+                        params,
+                        ret: Box::new(ret),
+                    });
                 }
                 if self.check(&TokenKind::Lt) {
                     self.advance();
@@ -1278,59 +1305,30 @@ impl Parser {
                                 expr = Expr::Await(Box::new(expr));
                                 continue;
                             }
-                            // turbofish: expr.method::<T>(args) — capture the full type path
+                            // turbofish: expr.method::<T1, T2>(args) — collect a real
+                            // Vec<Ty> so codegen can re-emit the full annotation.
                             let turbofish = if self.check(&TokenKind::ColonColon) {
                                 self.advance();
                                 if self.check(&TokenKind::Lt) {
                                     self.advance(); // consume <
-                                                    // Collect path segments (Ident::Ident::Ident) as the type name
-                                    let mut ty_name = match self.peek().clone() {
-                                        TokenKind::Ident(s) => {
+                                    let mut tys: Vec<Ty> = Vec::new();
+                                    while !self.check(&TokenKind::Gt)
+                                        && !matches!(self.peek(), TokenKind::Shr | TokenKind::Eof)
+                                    {
+                                        if matches!(self.peek(), TokenKind::Label(_)) {
                                             self.advance();
-                                            s
+                                            self.eat(&TokenKind::Comma);
+                                            continue;
                                         }
-                                        _ => "_".to_string(),
-                                    };
-                                    // Follow :: path segments
-                                    while self.check(&TokenKind::ColonColon) {
-                                        self.advance();
-                                        match self.peek().clone() {
-                                            TokenKind::Ident(s) => {
-                                                self.advance();
-                                                ty_name = s;
-                                            }
-                                            _ => break,
+                                        tys.push(self.parse_ty()?);
+                                        if !self.eat(&TokenKind::Comma) {
+                                            break;
                                         }
                                     }
-                                    // skip rest of the generic args until closing >
-                                    let mut depth = 1i32;
-                                    loop {
-                                        match self.peek() {
-                                            TokenKind::Lt => {
-                                                depth += 1;
-                                                self.advance();
-                                            }
-                                            TokenKind::Gt => {
-                                                depth -= 1;
-                                                self.advance();
-                                                if depth <= 0 {
-                                                    break;
-                                                }
-                                            }
-                                            TokenKind::Shr => {
-                                                depth -= 2;
-                                                self.advance();
-                                                if depth <= 0 {
-                                                    break;
-                                                }
-                                            }
-                                            TokenKind::Eof => break,
-                                            _ => {
-                                                self.advance();
-                                            }
-                                        }
+                                    if !self.eat(&TokenKind::Gt) && self.eat(&TokenKind::Shr) {
+                                        self.pending_gt = true;
                                     }
-                                    Some(ty_name)
+                                    Some(tys)
                                 } else {
                                     None
                                 }
