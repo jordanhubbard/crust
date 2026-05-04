@@ -1006,6 +1006,12 @@ impl Interpreter {
                         Some(t) if t.contains("HashMap") => "collect_hashmap".to_string(),
                         _ => method.clone(),
                     }
+                // Disambiguate Vec::remove(idx) from HashSet::remove(&val):
+                // Crust evaluates `&x` as identity, so by the time stdlib sees
+                // the arg, the reference syntax is gone. Detect it from the
+                // AST and remap to a value-removal method (crust-aiy).
+                } else if method == "remove" && matches!(args.as_slice(), [Expr::Ref { .. }]) {
+                    "remove_value".to_string()
                 } else {
                     method.clone()
                 };

@@ -76,11 +76,27 @@ pub fn call_method_mut(
             }
             Some((Ok(Value::Unit), Value::Vec(v)))
         }
+        // HashSet-style remove-by-value, dispatched here when the caller
+        // wrote `set.remove(&v)`. eval.rs detects the `&` and remaps to
+        // `remove_value` so this arm fires instead of the index-based one
+        // (crust-aiy).
+        (Value::Vec(mut v), "remove_value") => {
+            let target = args.into_iter().next().unwrap_or(Value::Unit);
+            let key = target.to_string();
+            if let Some(pos) = v.iter().position(|x| x.to_string() == key) {
+                v.remove(pos);
+                Some((Ok(Value::Bool(true)), Value::Vec(v)))
+            } else {
+                Some((Ok(Value::Bool(false)), Value::Vec(v)))
+            }
+        }
         (Value::Vec(mut v), "remove") => {
             let idx = match args.into_iter().next() {
                 Some(Value::Int(i)) => i as usize,
                 Some(other) => {
-                    // HashSet::remove(&val) — remove by value
+                    // Best-effort fallback for legacy callers that pass a
+                    // non-integer remove key without the `&` syntax. A
+                    // first-class HashSet value type would let us drop this.
                     let key = other.to_string();
                     if let Some(pos) = v.iter().position(|x| x.to_string() == key) {
                         v.remove(pos);
@@ -4194,6 +4210,40 @@ mod tests {
                  println!(\"{:?}\", m.get(\"missing\"));\n\
              }");
         assert_eq!(out, vec!["2", "true", "Some(1)", "None"]);
+    }
+
+    // ── HashSet ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn hashset_remove_by_reference_removes_value_not_index() {
+        // Regression test for crust-aiy: previously `set.remove(&2)` was
+        // dispatched as Vec::remove(idx=2) and removed the element at
+        // position 2, leaving 2 in the set. eval.rs now remaps `remove(&v)`
+        // to `remove_value` based on the AST.
+        let out = run("use std::collections::HashSet;\n\
+             fn main() {\n\
+                 let mut a: HashSet<i64> = HashSet::new();\n\
+                 a.insert(1); a.insert(2); a.insert(3);\n\
+                 a.remove(&2);\n\
+                 println!(\"len={}\", a.len());\n\
+                 println!(\"has2={}\", a.contains(&2));\n\
+                 println!(\"has1={}\", a.contains(&1));\n\
+                 println!(\"has3={}\", a.contains(&3));\n\
+             }");
+        assert_eq!(out, vec!["len=2", "has2=false", "has1=true", "has3=true"]);
+    }
+
+    #[test]
+    fn vec_remove_by_index_still_works() {
+        // Vec::remove(idx) — when no `&` is used, semantics stay
+        // index-based.
+        let out = run("fn main() {\n\
+                 let mut v = vec![10, 20, 30];\n\
+                 let removed = v.remove(1);\n\
+                 println!(\"{}\", removed);\n\
+                 println!(\"{:?}\", v);\n\
+             }");
+        assert_eq!(out, vec!["20", "[10, 30]"]);
     }
 
     #[test]

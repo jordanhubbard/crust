@@ -68,7 +68,6 @@ fn state_machine_walks_through_events() {
 fn hashset_ops_basic_surface() {
     ensure_built();
     let out = run_example("hashset_ops");
-    // post-remove contains intentionally not asserted (see crust-aiy)
     assert_eq!(
         out,
         vec![
@@ -76,6 +75,7 @@ fn hashset_ops_basic_surface() {
             "has 2 = true",
             "has 99 = false",
             "after remove(2), len = 2",
+            "after remove(2), has 2 = false",
         ]
     );
 }
