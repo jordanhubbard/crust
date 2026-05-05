@@ -98,7 +98,7 @@ Tree-walk evaluator over the AST. Supports:
 - Traits with dynamic dispatch via `dyn Trait`
 - Generics (type-erased at the interpreter — Crust's `>` is value-polymorphic so `fn max<T: Ord>` runs without monomorphisation; codegen still emits real generics for rustc to monomorphise)
 - Inline modules (`mod NAME { items }`) with qualified-call resolution (`outer::inner::ident`)
-- Standard library: `Vec`, `HashMap`, `HashSet`, `BTreeMap`, `BTreeSet`, `VecDeque`, `String`, `Option`, `Result`, `Range`, iterator adapters
+- Standard library: `Vec`, `HashMap`, `HashSet`, `BTreeMap`, `BTreeSet` (dedicated sorted-and-deduped `Value::SortedSet` variant), `VecDeque`, `String`, `Option`, `Result`, `Range`, iterator adapters
 - Built-in macros: `println!`, `print!`, `format!`, `vec!`, `assert!`/`assert_eq!`/`assert_ne!`, `dbg!`, `write!`/`writeln!`, `panic!`, `todo!`/`unimplemented!`/`unreachable!`. Other macros pass through to rustc at codegen time with a Develop+ warning.
 
 At Level 0, the interpreter handles ownership by implicit cloning — every value is reference-counted internally. References (`&x`, `*y`, `Rc`, `Arc`, `Cell`, `RefCell`) are identity at the interpreter level; a real reference/aliasing model is `crust-0ku`.

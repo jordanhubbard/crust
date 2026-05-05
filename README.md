@@ -222,16 +222,16 @@ for the TDD and coverage policy.
 
 **v0.2.0** — Level 0 codegen end-to-end working; verification surface scaffolded.
 
-- **186 tests pass** (136 unit + 50 integration), `cargo fmt --check` clean,
+- **200 tests pass** (148 unit + 52 integration), `cargo fmt --check` clean,
   `cargo clippy -D warnings` clean.
 - **All 13 bundled examples** build via `crust build` and produce stdout
   byte-identical to `crust run` (verified by the differential-parity test).
-- **Coverage**: regions 52.70%, lines 55.08%, functions 74.63%. CI ratchet at 50%.
+- **Coverage**: regions 41.68%, lines 43.70%, functions 61.89%. CI ratchet at 40%.
 
 Implemented:
 
 - **All primitive types**: `i8`–`i128`, `u8`–`u128`, `isize`, `usize`, `f32`/`f64`, `bool`, `char`, `str`/`String`. Width-sensitive methods (`wrapping_*`, `checked_*`, `saturating_*`, `overflowing_*`, `leading_zeros`, …) emit a Develop+ warning since the interpreter collapses to `i64`.
-- **Collections**: `Vec`, `HashMap`, `HashSet`, `BTreeMap`, `VecDeque` (all backed by `Vec`/`HashMap`; `HashMap`/`BTreeMap` iterate sorted; `BTreeSet` insertion-ordered today, tracked).
+- **Collections**: `Vec`, `HashMap`, `HashSet`, `BTreeMap`, `BTreeSet`, `VecDeque`. `HashMap` / `BTreeMap` / `BTreeSet` iterate in sorted order matching rustc; `BTreeSet` is backed by a dedicated `Value::SortedSet` variant that maintains the sorted-and-deduped invariant on insert.
 - **Traits**: definition, implementation, default methods, `dyn Trait`, operator overloading (`Add`, `Mul`, `Neg`, etc.). `impl Trait` accepted with a Develop+ warning since the parser collapses bounds.
 - **Closures**: capturing, `move`, `FnMut`, returning closures, higher-order functions. Iterator-chain closures get per-method `*p` strip-down so user code with explicit derefs round-trips through codegen.
 - **Pattern matching**: destructuring, guards, or-patterns, slice patterns `[a, b, ..]`, range patterns, `@` bindings. Refutable patterns in `let` auto-inject `else { unreachable!() }` at Level <Ship.
@@ -247,9 +247,10 @@ Implemented:
 
 ### Open work (beads)
 
-- `crust-0ku` (P1) — interpreter reference / aliasing / mutation model. Today `&x` is identity, `Rc`/`Arc`/`Cell`/`RefCell` are transparent. A real model would track borrow scopes.
-- `crust-v8b` (P2) — proof-mode body interpreter. Today the SMT layer treats functions as uninterpreted; real soundness requires symbolic execution of the body.
-- `crust-4ri` (P3, deferred) — `BTreeSet` sorted iteration. Needs a Value-variant rework.
+Two research-grade items remain. Both are multi-week designs in their own right; everything else from the v0.2 surface either landed or is documented as a tracked divergence in [docs/compatibility.md](docs/compatibility.md).
+
+- `crust-0ku` (P1) — interpreter reference / aliasing / mutation model. Today `&x` is identity, `Rc`/`Arc`/`Cell`/`RefCell` are transparent. A real model would track borrow scopes and aliasing constraints.
+- `crust-v8b` (P2) — proof-mode body interpreter. Today the SMT layer treats functions as uninterpreted; real soundness requires symbolic execution of the body so contracts are proved against actual semantics, not just consistency.
 
 See [DESIGN.md](DESIGN.md) for the technical architecture and
 [docs/compatibility.md](docs/compatibility.md) for the authoritative Rust
